@@ -5,6 +5,7 @@ import { render, cleanup, act } from '@testing-library/react';
 vi.mock('@/utils/supabase', () => ({
   supabase: {
     auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
       onAuthStateChange: vi.fn(() => ({
         data: { subscription: { unsubscribe: vi.fn() } },
       })),
@@ -16,6 +17,11 @@ vi.mock('@/utils/supabase', () => ({
 
 vi.mock('posthog-js', () => ({
   default: { identify: vi.fn() },
+}));
+
+vi.mock('@/config/accessPolicy', async (original) => ({
+  ...(await original<typeof import('@/config/accessPolicy')>()),
+  accessPolicy: { requireLogin: false, allowedUserIds: [] },
 }));
 
 import { AuthProvider, useAuth } from '@/context/AuthContext';

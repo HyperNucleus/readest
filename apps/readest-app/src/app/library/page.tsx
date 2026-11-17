@@ -1,5 +1,7 @@
 'use client';
 
+import { accessPolicy } from '@/config/accessPolicy';
+
 import BookshelvesDialog from './components/BookshelvesDialog';
 
 import clsx from 'clsx';
@@ -754,6 +756,7 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
     isInitiating.current = true;
 
     const initLogin = async () => {
+      if (accessPolicy.requireLogin) return;
       const appService = await envConfig.getAppService();
       const settings = await appService.loadSettings();
       if (token && user) {

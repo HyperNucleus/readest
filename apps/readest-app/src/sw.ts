@@ -1,5 +1,6 @@
+import { accessPolicy } from '@/config/accessPolicy';
 import type { PrecacheEntry, SerwistGlobalConfig } from 'serwist';
-import { NetworkFirst, CacheFirst, ExpirationPlugin, Serwist } from 'serwist';
+import { NetworkFirst, NetworkOnly, CacheFirst, ExpirationPlugin, Serwist } from 'serwist';
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -10,7 +11,12 @@ declare global {
 declare const self: ServiceWorkerGlobalScope;
 
 const serwist = new Serwist({
-  precacheEntries: self.__SW_MANIFEST,
+  precacheEntries: accessPolicy.requireLogin
+    ? self.__SW_MANIFEST?.filter((entry) => {
+        const url = typeof entry === 'string' ? entry : entry.url;
+        return /\.[a-zA-Z0-9]+$/.test(url) && !url.endsWith('.html');
+      })
+    : self.__SW_MANIFEST,
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
@@ -26,6 +32,17 @@ const serwist = new Serwist({
     ],
   },
   runtimeCaching: [
+    ...(accessPolicy.requireLogin
+      ? [
+          {
+            matcher: ({ request, url }: { request: Request; url: URL }) =>
+              request.mode === 'navigate' ||
+              url.pathname.startsWith('/api/') ||
+              request.headers.has('rsc'),
+            handler: new NetworkOnly(),
+          },
+        ]
+      : []),
     {
       matcher: ({ url, request }) => {
         const clientRoutes = ['/library', '/reader'];

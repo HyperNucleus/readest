@@ -58,7 +58,21 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
-  location ~ ^/(auth|rest)/v1/ {
+  location = /_readest_access {
+    internal;
+    proxy_pass http://127.0.0.1:${s.ports.client}/api/auth/access;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+  location /rest/v1/ {
+    auth_request /_readest_access;
+    proxy_pass http://127.0.0.1:${s.ports.kong};
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+  location /auth/v1/ {
     proxy_pass http://127.0.0.1:${s.ports.kong};
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;

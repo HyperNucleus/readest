@@ -1,3 +1,4 @@
+import { accessPolicy } from '@/config/accessPolicy';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET, HEAD } from '@/app/api/opds/proxy/route';
@@ -349,7 +350,9 @@ describe('OPDS proxy response isolation', () => {
       }),
     );
     expect(sent[0]?.get('Authorization')).toBe('Basic secret');
-    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(res.headers.get('Cache-Control')).toBe(
+      accessPolicy.requireLogin ? 'private, no-store' : 'no-store',
+    );
   });
 
   it.each(['HEAD', 'stream'])('isolates %s responses as well', async (mode) => {
@@ -379,7 +382,9 @@ describe('OPDS proxy response isolation', () => {
       new Response('<feed/>', { headers: { 'Content-Type': 'application/atom+xml' } }),
     );
     const res = await GET(new NextRequest(proxyReq('https://feeds.example.com/feed').url + suffix));
-    expect(res.headers.get('Cache-Control')).toBe(expected);
+    expect(res.headers.get('Cache-Control')).toBe(
+      accessPolicy.requireLogin ? 'private, no-store' : expected,
+    );
   });
 
   it('keys a cached anonymous feed on the Authorization header', async () => {
@@ -392,7 +397,9 @@ describe('OPDS proxy response isolation', () => {
       }),
     );
     const res = await GET(proxyReq('https://feeds.example.com/feed'));
-    expect(res.headers.get('Cache-Control')).toBe('public, max-age=300');
+    expect(res.headers.get('Cache-Control')).toBe(
+      accessPolicy.requireLogin ? 'private, no-store' : 'public, max-age=300',
+    );
     expect(res.headers.get('Vary')).toBe('Authorization');
   });
 });

@@ -1,4 +1,4 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { fetch as tauriFetch } from '@/utils/nativePrivateFetch';
 import { isBlockedHost } from '@/utils/network';
 import { getProxiedURL, needsProxy } from '@/app/opds/utils/opdsReq';
 import { isTauriAppPlatform } from '@/services/environment';

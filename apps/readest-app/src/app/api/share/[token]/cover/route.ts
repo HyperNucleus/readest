@@ -1,3 +1,4 @@
+import { accessPolicy } from '@/config/accessPolicy';
 import { NextResponse } from 'next/server';
 import { getDownloadSignedUrl } from '@/utils/object';
 import { rejectionToHttp, resolveActiveShare } from '@/libs/shareServer';
@@ -34,6 +35,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
   return NextResponse.redirect(url, {
     status: 302,
-    headers: { 'Cache-Control': 'public, max-age=300' },
+    headers: {
+      'Cache-Control': accessPolicy.requireLogin ? 'private, no-store' : 'public, max-age=300',
+    },
   });
 }

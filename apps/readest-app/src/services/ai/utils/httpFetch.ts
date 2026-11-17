@@ -1,4 +1,4 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { fetch as tauriFetch } from '@/utils/nativePrivateFetch';
 import { isTauriAppPlatform } from '@/services/environment';
 
 /**

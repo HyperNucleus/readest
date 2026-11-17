@@ -1,3 +1,4 @@
+import { accessPolicy } from '@/config/accessPolicy';
 import { ImageResponse } from 'next/og';
 import { NextResponse } from 'next/server';
 import { getDownloadSignedUrl } from '@/utils/object';
@@ -46,7 +47,9 @@ export const renderShareOgImage = async (token: string): Promise<Response> => {
       width: WIDTH,
       height: HEIGHT,
       headers: {
-        'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+        'Cache-Control': accessPolicy.requireLogin
+          ? 'private, no-store'
+          : 'public, max-age=3600, s-maxage=3600',
       },
     },
   );

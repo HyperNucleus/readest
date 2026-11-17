@@ -284,3 +284,24 @@ POSIX 配置文件权限为 0600；Windows 请用用户目录和文件 ACL 保�
 `NODE_OPTIONS=--no-experimental-webstorage pnpm test --run` 避免内置实验性 localStorage
 干扰现有测试环境。操作异常中断可能留下 `.selfhost/operation.lock`；确认没有构建、
 部署或发布进程运行后再移除锁，向导不会自行强行解锁。
+
+### 强制登录（默认开启）
+
+统一代码配置位于 `apps/readest-app/src/config/accessPolicy.ts`：
+
+```ts
+export const accessPolicy = {
+  requireLogin: true,
+  allowedUserIds: [] as string[],
+};
+```
+
+- `requireLogin: true`：网页和原生客户端启动时联网验证会话；未登录不挂载功能页面，退出或令牌过期后关闭功能页面。服务端页面和所有 `/api/` 业务请求独立验证凭据。仅登录流程、静态资源和不含业务数据的 CORS 预检放行。
+- 改为 `false` 并重新构建、部署服务端及客户端，可恢复游客本地使用。各业务接口原有的鉴权不会被关闭。
+- `allowedUserIds` 留空时允许本实例所有正式账号（拒绝 Supabase 匿名账号）。完全自用可以填入自己账号的 Supabase user ID；这不是邮箱或密码，也不要填入 service-role key。个人部署仍关闭公开注册。
+- 网页使用经过服务端验证的 HttpOnly、SameSite Cookie；HTTPS 下启用 Secure。原生客户端使用本站令牌。OPDS 等远端服务的凭据与本站令牌分开传递。
+- 开启时不再缓存功能页面/API 响应，启动需要联网，不能依赖离线缓存绕过登录。已经下载到设备的书籍文件不会被加密或删除。
+
+升级已有服务器时，除重新构建应用外，还需安装新生成的 Nginx 配置并检查、重载 Nginx。新配置对 `/rest/v1/` 增加 `auth_request`，通过应用的 `/api/auth/access` 使用同一开关验证请求；认证服务 `/auth/v1/` 保持可达。不要把 Kong、数据库或 MinIO 管理端口直接开放到公网。
+
+开启时公开分享页面、分享元数据及下载入口也需要登录。已有签发的对象存储预签名 URL 仍是有效期内的访问凭据，关闭阅读器不会撤销它们；对象存储桶应保持私有。第三方 Webhook、定时任务及只携带设备专用凭据的插件不会绕过统一鉴权，需要本站有效访问令牌，或关闭此开关后使用其原有鉴权。

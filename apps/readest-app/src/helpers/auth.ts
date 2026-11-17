@@ -1,3 +1,4 @@
+import { safeAuthRedirect } from '@/config/accessPolicy';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 
@@ -75,12 +76,12 @@ export function handleAuthCallback({
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
-      login(accessToken, user);
+      await login(accessToken, user);
       if (type === 'recovery') {
         navigate('/auth/recovery');
         return;
       }
-      navigate(next);
+      navigate(safeAuthRedirect(next));
     } else {
       console.error('Error fetching user data');
       navigate('/auth/error');

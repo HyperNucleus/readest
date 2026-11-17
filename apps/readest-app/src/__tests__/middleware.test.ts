@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
 import { middleware } from '@/middleware';
 
-const coep = (path: string) =>
-  middleware(new NextRequest(`http://localhost:3000${path}`)).headers.get(
+const coep = async (path: string) =>
+  (await middleware(new NextRequest(`http://localhost:3000${path}`))).headers.get(
     'Cross-Origin-Embedder-Policy',
   );
 
@@ -21,53 +21,53 @@ describe('middleware CORS preflight', () => {
       }),
     );
 
-  it('echoes the requested headers instead of a wildcard so the preflight cache covers Authorization', () => {
+  it('echoes the requested headers instead of a wildcard so the preflight cache covers Authorization', async () => {
     // The Fetch spec excludes Authorization from wildcard matching in the
     // preflight cache, so `Allow-Headers: *` forces a fresh OPTIONS round trip
     // before every authenticated API call despite Max-Age (readest-web was
     // serving ~4M preflights/day because of this).
-    const res = preflight('authorization,content-type');
+    const res = await preflight('authorization,content-type');
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe('authorization,content-type');
     expect(res.headers.get('Vary')).toContain('Access-Control-Request-Headers');
     expect(res.headers.get('Access-Control-Max-Age')).toBe('86400');
   });
 
-  it('allows Authorization and Content-Type when the preflight requests no headers', () => {
-    const res = preflight();
+  it('allows Authorization and Content-Type when the preflight requests no headers', async () => {
+    const res = await preflight();
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
   });
 
-  it('allows PATCH so the native apps can approve a pending Send to Readest sender', () => {
+  it('allows PATCH so the native apps can approve a pending Send to Readest sender', async () => {
     // The apps call this API cross-origin, so the webview drops any method
     // missing from this list before the request reaches the route.
-    const methods = preflight().headers.get('Access-Control-Allow-Methods')?.split(', ');
+    const methods = (await preflight()).headers.get('Access-Control-Allow-Methods')?.split(', ');
     expect(methods).toContain('PATCH');
   });
 });
 
 describe('middleware cross-origin isolation headers', () => {
-  it('serves COEP credentialless on the /s share landing so the R2 cover <img> loads', () => {
+  it('serves COEP credentialless on the /s share landing so the R2 cover <img> loads', async () => {
     // The cover redirects to a cross-origin R2 URL that can't carry a CORP
     // header; credentialless keeps the page isolated while allowing it.
-    expect(coep('/s')).toBe('credentialless');
-    expect(coep('/s/Qmup0X1A8ovl2FmKJKA8mB')).toBe('credentialless');
+    expect(await coep('/s')).toBe('credentialless');
+    expect(await coep('/s/Qmup0X1A8ovl2FmKJKA8mB')).toBe('credentialless');
   });
 
-  it('keeps the stricter require-corp on every other document route', () => {
-    expect(coep('/')).toBe('require-corp');
-    expect(coep('/library')).toBe('require-corp');
+  it('keeps the stricter require-corp on every other document route', async () => {
+    expect(await coep('/')).toBe('require-corp');
+    expect(await coep('/library')).toBe('require-corp');
     // Must not be caught by a naive startsWith('/s').
-    expect(coep('/settings')).toBe('require-corp');
-    expect(coep('/search')).toBe('require-corp');
+    expect(await coep('/settings')).toBe('require-corp');
+    expect(await coep('/search')).toBe('require-corp');
   });
 
-  it('always pairs COOP same-origin on document responses', () => {
-    const res = middleware(new NextRequest('http://localhost:3000/s/tok'));
+  it('always pairs COOP same-origin on document responses', async () => {
+    const res = await middleware(new NextRequest('http://localhost:3000/s/tok'));
     expect(res.headers.get('Cross-Origin-Opener-Policy')).toBe('same-origin');
   });
 
-  it('does not put COEP on /api routes', () => {
-    const res = middleware(new NextRequest('http://localhost:3000/api/share/tok'));
+  it('does not put COEP on /api routes', async () => {
+    const res = await middleware(new NextRequest('http://localhost:3000/api/share/tok'));
     expect(res.headers.get('Cross-Origin-Embedder-Policy')).toBeNull();
   });
 });

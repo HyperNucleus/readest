@@ -1,6 +1,9 @@
 'use client';
 
 import '@/utils/polyfill';
+import AuthGuard from '@/components/AuthGuard';
+import { accessPolicy, isPublicAuthPage } from '@/config/accessPolicy';
+import { usePathname, useRouter } from 'next/navigation';
 import i18n from '@/i18n/i18n';
 import { useEffect, useState } from 'react';
 import { IconContext } from 'react-icons';
@@ -113,6 +116,8 @@ const finalizeTelemetryDecision = ({
 
 const Providers = ({ children }: { children: React.ReactNode }) => {
   const { envConfig, appService } = useEnv();
+  const pathname = usePathname();
+  const router = useRouter();
   const { applyUILanguage } = useSettingsStore();
   const { applyBackgroundTexture } = useBackgroundTexture();
   const { applyEinkMode } = useEinkMode();
@@ -259,33 +264,41 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <CSPostHogProvider>
-      <CarMediaLibraryBridge />
       <AuthProvider>
-        <IconContext.Provider value={{ size: `${iconSize}px` }}>
-          <SyncProvider>
-            <DropdownProvider>
-              <CommandPaletteProvider>
-                <div
-                  aria-hidden={appShellHidden}
-                  style={appShellHidden ? { display: 'none' } : undefined}
-                >
-                  {children}
-                  <CommandPalette />
-                  <AtmosphereOverlay />
-                  <PassphrasePrompt />
-                  <WindowResizeHandles />
-                </div>
-                <AppLockDialog />
-                <TelemetryConsentDialog
-                  open={showTelemetryConsent}
-                  onClose={() => setShowTelemetryConsent(false)}
-                />
-                {showAppLockScreen && <AppLockScreen />}
-                <WindowOutline />
-              </CommandPaletteProvider>
-            </DropdownProvider>
-          </SyncProvider>
-        </IconContext.Provider>
+        <AuthGuard onRedirect={router.replace}>
+          {accessPolicy.requireLogin && isPublicAuthPage(pathname ?? '') ? (
+            children
+          ) : (
+            <>
+              <CarMediaLibraryBridge />
+              <IconContext.Provider value={{ size: `${iconSize}px` }}>
+                <SyncProvider>
+                  <DropdownProvider>
+                    <CommandPaletteProvider>
+                      <div
+                        aria-hidden={appShellHidden}
+                        style={appShellHidden ? { display: 'none' } : undefined}
+                      >
+                        {children}
+                        <CommandPalette />
+                        <AtmosphereOverlay />
+                        <PassphrasePrompt />
+                        <WindowResizeHandles />
+                      </div>
+                      <AppLockDialog />
+                      <TelemetryConsentDialog
+                        open={showTelemetryConsent}
+                        onClose={() => setShowTelemetryConsent(false)}
+                      />
+                      {showAppLockScreen && <AppLockScreen />}
+                      <WindowOutline />
+                    </CommandPaletteProvider>
+                  </DropdownProvider>
+                </SyncProvider>
+              </IconContext.Provider>
+            </>
+          )}
+        </AuthGuard>
       </AuthProvider>
     </CSPostHogProvider>
   );

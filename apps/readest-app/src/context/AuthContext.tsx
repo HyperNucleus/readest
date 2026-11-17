@@ -8,12 +8,16 @@ import {
   useMemo,
   ReactNode,
   useEffect,
+  useRef,
 } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 import posthog from 'posthog-js';
+import { accessPolicy, isAllowedUser } from '@/config/accessPolicy';
+import { withPrivateAuth } from '@/utils/privateFetch';
 
 interface AuthContextType {
+  status: 'loading' | 'authenticated' | 'unauthenticated';
   token: string | null;
   user: User | null;
   login: (token: string, user: User) => void;
@@ -24,98 +28,186 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [token, setToken] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('token');
-    }
-    return null;
-  });
-  const [user, setUser] = useState<User | null>(() => {
-    if (typeof window !== 'undefined') {
-      const userJson = localStorage.getItem('user');
-      return userJson ? JSON.parse(userJson) : null;
-    }
-    return null;
-  });
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [status, setStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
+  const generation = useRef(0);
+  const currentToken = useRef<string | null>(null);
+  const cookieQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const isWeb = process.env['NEXT_PUBLIC_APP_PLATFORM'] !== 'tauri';
+
+  const syncCookie = useCallback((accessToken: string | null, attempt: number) => {
+    const job = cookieQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (attempt !== generation.current) return false;
+        const response = await fetch('/api/auth/session', {
+          method: accessToken ? 'POST' : 'DELETE',
+          ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
+        });
+        return response.ok;
+      });
+    cookieQueue.current = job;
+    return job;
+  }, []);
+
+  const clear = useCallback(() => {
+    currentToken.current = null;
+    setToken(null);
+    setUser(null);
+    setStatus('unauthenticated');
+    for (const key of ['token', 'refresh_token', 'user']) localStorage.removeItem(key);
+  }, []);
+
+  const acceptSession = useCallback(
+    async (accessToken: string | null, cachedUser?: User) => {
+      const attempt = ++generation.current;
+      if (!accessToken) {
+        clear();
+        if (accessPolicy.requireLogin && isWeb) {
+          await syncCookie(null, generation.current).catch(() => undefined);
+        }
+        return;
+      }
+      if (accessPolicy.requireLogin) {
+        if (!currentToken.current) setStatus('loading');
+      }
+      try {
+        const { data, error } = accessPolicy.requireLogin
+          ? await supabase.auth.getUser(accessToken)
+          : { data: { user: cachedUser ?? null }, error: null };
+        if (attempt !== generation.current) return;
+        if (error || !data.user || (accessPolicy.requireLogin && !isAllowedUser(data.user))) {
+          if (accessPolicy.requireLogin && isWeb)
+            void syncCookie(null, attempt).catch(() => undefined);
+          clear();
+          return;
+        }
+        if (accessPolicy.requireLogin && isWeb) {
+          const ok = await syncCookie(accessToken, attempt);
+          if (attempt !== generation.current) return;
+          if (!ok) {
+            clear();
+            return;
+          }
+        }
+        currentToken.current = accessToken;
+        localStorage.setItem('token', accessToken);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setToken(accessToken);
+        setUser(data.user);
+        setStatus('authenticated');
+        posthog.identify(data.user.id);
+      } catch {
+        if (attempt === generation.current) clear();
+      }
+    },
+    [clear, isWeb, syncCookie],
+  );
 
   useEffect(() => {
-    const syncSession = (
-      session: { access_token: string; refresh_token: string; user: User } | null,
-    ) => {
-      if (session) {
-        console.log('Syncing session');
-        const { access_token, refresh_token, user } = session;
-        localStorage.setItem('token', access_token);
-        localStorage.setItem('refresh_token', refresh_token);
-        localStorage.setItem('user', JSON.stringify(user));
-        posthog.identify(user.id);
-        setToken(access_token);
-        setUser(user);
-      } else {
-        localStorage.removeItem('token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user');
-        setToken(null);
-        setUser(null);
-      }
-    };
-    const refreshSession = async () => {
+    const originalFetch = window.fetch;
+    const privateFetch = withPrivateAuth(originalFetch.bind(window), () => currentToken.current);
+    window.fetch = privateFetch;
+    let active = true;
+    let eventTimer: ReturnType<typeof setTimeout> | undefined;
+    const restore = async () => {
+      const attempt = generation.current;
       try {
-        await supabase.auth.refreshSession();
+        const { data, error } = await supabase.auth.getSession();
+        if (!active || attempt !== generation.current) return;
+        await acceptSession(
+          error ? null : (data.session?.access_token ?? null),
+          data.session?.user,
+        );
       } catch {
-        syncSession(null);
+        if (active && attempt === generation.current) clear();
       }
     };
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((_, session) => {
-      syncSession(session);
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.refresh_token) localStorage.setItem('refresh_token', session.refresh_token);
+      // Do not await another auth method inside Supabase's auth-state lock.
+      clearTimeout(eventTimer);
+      const eventGeneration = ++generation.current;
+      eventTimer = setTimeout(() => {
+        if (active && eventGeneration === generation.current)
+          void acceptSession(session?.access_token ?? null, session?.user);
+      }, 0);
     });
-
-    refreshSession();
+    void restore();
+    window.addEventListener('focus', restore);
     return () => {
-      subscription?.subscription.unsubscribe();
+      active = false;
+      generation.current++;
+      clearTimeout(eventTimer);
+      subscription.subscription.unsubscribe();
+      window.removeEventListener('focus', restore);
+      if (window.fetch === privateFetch) window.fetch = originalFetch;
     };
-  }, []);
+  }, [acceptSession, clear]);
 
-  // setToken / setUser from useState are stable across renders, so the empty
-  // deps array is correct. Wrapping in useCallback (and only including stable
-  // refs in the deps) is what makes the useMemo below actually memoize the
-  // context value — without this, login/logout/refresh would be recreated on
-  // every render and the memo would always invalidate.
-  const login = useCallback((newToken: string, newUser: User) => {
-    console.log('Logging in');
-    setToken(newToken);
-    setUser(newUser);
-    localStorage.setItem('token', newToken);
-    localStorage.setItem('user', JSON.stringify(newUser));
-  }, []);
+  // Stop rendering private content at token expiry even if the device is
+  // offline and Supabase cannot refresh the session.
+  useEffect(() => {
+    if (!accessPolicy.requireLogin || !token) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let active = true;
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active || currentToken.current !== token) return;
+        const expires = data.session?.expires_at;
+        if (!expires) {
+          clear();
+          return;
+        }
+        timer = setTimeout(
+          () => {
+            if (currentToken.current === token) {
+              generation.current++;
+              clear();
+            }
+          },
+          Math.max(0, expires * 1000 - Date.now()),
+        );
+      })
+      .catch(clear);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [token, clear]);
+
+  const login = useCallback(
+    (newToken: string, newUser: User) => {
+      return acceptSession(newToken, newUser);
+    },
+    [acceptSession],
+  );
 
   const logout = useCallback(async () => {
-    console.log('Logging out');
-    try {
-      await supabase.auth.refreshSession();
-    } catch {
-    } finally {
-      await supabase.auth.signOut({ scope: 'local' });
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      setToken(null);
-      setUser(null);
+    generation.current++;
+    clear();
+    if (accessPolicy.requireLogin && isWeb) {
+      await syncCookie(null, generation.current).catch(() => undefined);
     }
-  }, []);
+    await supabase.auth.signOut({ scope: 'local' });
+  }, [clear, isWeb, syncCookie]);
 
   const refresh = useCallback(async () => {
     try {
       const { data, error } = await supabase.auth.refreshSession();
-      return !error && !!data.session;
+      await acceptSession(error ? null : (data.session?.access_token ?? null), data.session?.user);
+      return !!currentToken.current;
     } catch {
+      clear();
       return false;
     }
-  }, []);
+  }, [acceptSession, clear]);
 
   const value = useMemo(
-    () => ({ token, user, login, logout, refresh }),
-    [token, user, login, logout, refresh],
+    () => ({ status, token, user, login, logout, refresh }),
+    [status, token, user, login, logout, refresh],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

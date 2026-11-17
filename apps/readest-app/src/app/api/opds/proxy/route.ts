@@ -1,3 +1,4 @@
+import { accessPolicy } from '@/config/accessPolicy';
 import { READEST_OPDS_USER_AGENT } from '@/services/constants';
 import { NextRequest, NextResponse } from 'next/server';
 import { deserializeCustomHeaders } from '@/utils/customHeaders';
@@ -387,6 +388,7 @@ function isolateProxyResponse(response: NextResponse): NextResponse {
   for (const key of [...response.headers.keys()]) {
     if (!allowedHeaders.has(key)) response.headers.delete(key);
   }
+  if (accessPolicy.requireLogin) response.headers.set('Cache-Control', 'private, no-store');
   const mime = response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? '';
   const safeMime =
     /^(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|audio\/[a-z0-9.+-]+|video\/[a-z0-9.+-]+|text\/(?:plain|xml)|application\/(?:[a-z0-9.+-]+\+(?:xml|json)|xml|json|pdf|epub\+zip|zip|octet-stream))$/;

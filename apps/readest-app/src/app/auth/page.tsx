@@ -1,5 +1,6 @@
 'use client';
 import clsx from 'clsx';
+import { accessPolicy, safeAuthRedirect } from '@/config/accessPolicy';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -41,7 +42,7 @@ const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true
 export default function AuthPage() {
   const _ = useTranslation();
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, status } = useAuth();
   const { envConfig, appService } = useEnv();
   const { safeAreaInsets, isRoundedWindow, isIPhoneDuo } = useThemeStore();
   const { isTrafficLightVisible } = useTrafficLightStore();
@@ -250,7 +251,7 @@ export default function AuthPage() {
     })();
     const redirectTo = new URLSearchParams(window.location.search).get('redirect');
     if (redirectTo) {
-      router.push(redirectTo);
+      router.push(safeAuthRedirect(redirectTo));
     } else {
       router.back();
     }
@@ -276,6 +277,7 @@ export default function AuthPage() {
   }, []);
 
   useEffect(() => {
+    if (accessPolicy.requireLogin) return;
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.access_token && session.user) {
         login(session.access_token, session.user);
@@ -285,7 +287,7 @@ export default function AuthPage() {
         const now = Date.now();
         localStorage.setItem(lastRedirectAtKey, now.toString());
         if (now - lastRedirectAt > 3000) {
-          router.push(redirectTo ?? '/library');
+          router.push(safeAuthRedirect(redirectTo));
         }
       }
     });
@@ -295,6 +297,12 @@ export default function AuthPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
+
+  useEffect(() => {
+    if (accessPolicy.requireLogin && status === 'authenticated') {
+      router.replace(safeAuthRedirect(new URLSearchParams(window.location.search).get('redirect')));
+    }
+  }, [status, router]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -345,6 +353,7 @@ export default function AuthPage() {
           <button
             aria-label={_('Go Back')}
             onClick={handleGoBack}
+            hidden={accessPolicy.requireLogin}
             className={clsx('btn btn-ghost h-12 min-h-12 w-12 p-0 sm:h-8 sm:min-h-8 sm:w-8')}
           >
             <IoArrowBack className='text-base-content' />
@@ -380,6 +389,7 @@ export default function AuthPage() {
       <button
         aria-label={_('Go Back')}
         onClick={handleGoBack}
+        hidden={accessPolicy.requireLogin}
         className='btn btn-ghost fixed start-6 top-6 h-8 min-h-8 w-8 p-0'
       >
         <IoArrowBack className='text-base-content' />

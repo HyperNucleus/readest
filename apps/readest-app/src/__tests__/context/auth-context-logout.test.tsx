@@ -22,6 +22,11 @@ vi.mock('@/utils/supabase', async () => {
 
 vi.mock('posthog-js', () => ({ default: { identify: vi.fn() } }));
 
+vi.mock('@/config/accessPolicy', async (original) => ({
+  ...(await original<typeof import('@/config/accessPolicy')>()),
+  accessPolicy: { requireLogin: false, allowedUserIds: [] },
+}));
+
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { supabase } from '@/utils/supabase';
 

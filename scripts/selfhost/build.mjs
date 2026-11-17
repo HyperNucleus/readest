@@ -171,6 +171,11 @@ export async function buildClient(profile, local, version, passwords) {
   const tauri = (args) => run('pnpm', ['exec', 'tauri', ...args], { cwd: stageApp, env });
   const override = tauriOverride(p, release.version);
   if (target === 'android-arm64') {
+    // 上游为包体积使用单个 codegen unit；个人构建优先降低 LLVM 的峰值内存。
+    // 仅覆盖本次 Android 构建，不改工作区的 release profile 或桌面端参数。
+    env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16';
+    env.CARGO_PROFILE_RELEASE_OPT_LEVEL = '2';
+    env.CARGO_PROFILE_RELEASE_LTO = 'off';
     override.bundle.createUpdaterArtifacts = false;
     override.bundle.android = { versionCode: release.code };
   }
@@ -194,7 +199,8 @@ export async function buildClient(profile, local, version, passwords) {
     await writeFile(path.join(stageApp, 'src-tauri/gen/android/keystore.properties'),
       `# Selfhost build: local key path only; password is not persisted.\nkeyAlias=${local.androidAlias}\nstoreFile=${local.androidKey.replaceAll('\\', '/') }\n`, { mode: 0o600 });
   }
-  const args = target === 'darwin-aarch64' ? ['build', '--target', 'aarch64-apple-darwin', '--bundles', 'dmg'] :
+  // macOS 更新包需要显式启用 app；仅打包 dmg 不会生成 .app.tar.gz 和签名。
+  const args = target === 'darwin-aarch64' ? ['build', '--target', 'aarch64-apple-darwin', '--bundles', 'app,dmg'] :
     target === 'windows-x86_64' ? ['build', '--target', 'x86_64-pc-windows-msvc', '--bundles', 'nsis'] :
       ['android', 'build', '--target', 'aarch64', '--apk'];
   await tauri([...args, '--config', config]);

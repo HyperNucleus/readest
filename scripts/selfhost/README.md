@@ -311,3 +311,15 @@ export const accessPolicy = {
 Android 初始化与构建使用同一份 `tauri.personal.conf.json`。每次构建只清理 `.selfhost/build-source` 中的 Android 生成工程，按个人 `appId` 重新初始化，再恢复仓库手写的 Activity、资源和 Gradle 配置，并迁移 Java/Kotlin 包目录。不会删除原工作区的 `src-tauri/gen/android` 或签名密钥。
 
 如果旧版本在 `tauri android init` 后提示个人包路径不存在（例如 `java/top/hypernucleus/readest`），更新脚本后重新运行 `pnpm selfhost` →「编译当前平台客户端」即可，无需手动改包名或删除原项目。未成功发布的版本可以继续使用原版本号。
+
+### Android 编译进程被 SIGKILL
+
+如果最后是 `rustc ... (signal: 9, SIGKILL: kill)`，而不是具体 Rust 编译错误，表示进程被外部强制终止。Linux 上常见原因是主机或容器内存不足；前面的 `dead_code` warnings 不会导致这个退出。
+
+个人 Android 构建使用 `codegen-units=16`、`opt-level=2`、`lto=off`，降低优化阶段的内存压力，代价是 APK 可能变大、运行性能可能与上游 release 配置不同。macOS/Windows 保持原有优化参数。首次切换参数会重新编译受影响的 Rust 缓存。
+
+在失败的 Linux 主机上运行 `sudo journalctl -k -b | grep -Ei 'out of memory|oom|killed process'` 确认是否发生 OOM，并用 `free -h` 检查内存和 swap。在「配置本机编译与签名」中将 Rust 并行任务数设为 `1` 后重试。若仍被 OOM 杀死，需要增加可用内存或 swap；容器还需检查其内存限制。降低编译参数不能保证任意内存容量都能完成构建。
+
+### macOS 缺少自动更新包
+
+macOS 个人构建同时请求 `--bundles app,dmg`，生成 DMG 安装包以及 `.app.tar.gz` 和 `.sig` 自动更新产物。仅请求 `dmg` 时，Tauri 不会生成自动更新包，最终收集产物就会失败。更新脚本后重新编译即可，未成功发布的版本可以继续使用原版本号。

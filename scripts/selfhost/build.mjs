@@ -1,5 +1,5 @@
 // 在隔离的源码副本中编译个人客户端；不临时改写用户的工作区或签名配置。
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, writeFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ROOT, APP, STATE, clientProfile, loadJson, saveJson } from './config.mjs';
@@ -59,6 +59,29 @@ export async function filesUnder(directory) {
 
 // 仅修改副本中的身份字面值，覆盖原生 widget/分享/登录链接中散落的官方协议。
 export async function applyIdentity(stageApp, p) {
+  // Tauri checks the filesystem package path, not just Kotlin's package text.
+  // Overlay our handwritten activity onto the freshly generated personal
+  // package, keeping its generated sources and removing duplicate old classes.
+  const androidSources = path.join(stageApp, 'src-tauri/gen/android/app/src');
+  for (const sourceSet of await readdir(androidSources, { withFileTypes: true }).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  })) {
+    if (!sourceSet.isDirectory()) continue;
+    for (const language of ['java', 'kotlin']) {
+      const base = path.join(androidSources, sourceSet.name, language);
+      const oldPackage = path.join(base, 'com/bilingify/readest');
+      const newPackage = path.join(base, ...p.appId.split('.'));
+      if (oldPackage === newPackage) continue;
+      try { await stat(oldPackage); } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      await mkdir(newPackage, { recursive: true });
+      await cp(oldPackage, newPackage, { recursive: true });
+      await rm(oldPackage, { recursive: true });
+    }
+  }
   const candidates = [
     ...await filesUnder(path.join(stageApp, 'src')),
     ...await filesUnder(path.join(stageApp, 'src-tauri/gen/android')),
@@ -116,6 +139,18 @@ export async function prepareBuildSource() {
   return { stage, stageApp };
 }
 
+// 初始化和构建必须使用同一份个人配置。仅清理隔离副本中的生成目录，
+// 再保留仓库的手写原生功能；绝不删除用户工作区或签名密钥。
+export async function initializeAndroidProject(stageApp, config, tauri, sourceApp = APP) {
+  const android = path.join(stageApp, 'src-tauri/gen/android');
+  await rm(android, { recursive: true, force: true });
+  await tauri(['android', 'init', '--config', config]);
+  await cp(path.join(sourceApp, 'src-tauri/gen/android/app'), path.join(android, 'app'), {
+    recursive: true,
+    filter: (source) => !['build', '.gradle', 'generated'].includes(path.basename(source)),
+  });
+}
+
 // 编译副本复用已安装依赖，Rust 缓存放在 .selfhost 内；不复制本地环境文件或私钥。
 export async function buildClient(profile, local, version, passwords) {
   const p = clientProfile(profile);
@@ -134,13 +169,15 @@ export async function buildClient(profile, local, version, passwords) {
     READEST_KEY_PASSWORD: passwords.android ?? '',
   };
   const tauri = (args) => run('pnpm', ['exec', 'tauri', ...args], { cwd: stageApp, env });
-  if (target === 'android-arm64') {
-    // 先生成 Gradle 工程，再覆盖回仓库已有的原生实现，避免 init 模板替换 MainActivity。
-    await tauri(['android', 'init']);
-    await cp(path.join(APP, 'src-tauri/gen/android/app'), path.join(stageApp, 'src-tauri/gen/android/app'), { recursive: true });
-  }
-  await applyIdentity(stageApp, p);
   const override = tauriOverride(p, release.version);
+  if (target === 'android-arm64') {
+    override.bundle.createUpdaterArtifacts = false;
+    override.bundle.android = { versionCode: release.code };
+  }
+  const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
+  await saveJson(config, override);
+  if (target === 'android-arm64') await initializeAndroidProject(stageApp, config, tauri);
+  await applyIdentity(stageApp, p);
   // build.rs 原本无条件编译 Windows 缩略图 DLL；个人版不安装它，也无需执行这个嵌套构建。
   const rustBuild = path.join(stageApp, 'src-tauri/build.rs');
   const rustSource = await readFile(rustBuild, 'utf8');
@@ -149,8 +186,6 @@ export async function buildClient(profile, local, version, passwords) {
   // 主平台配置会自动合并 Windows resources，因此直接清空副本中的平台扩展配置。
   if (target === 'windows-x86_64') await saveJson(path.join(stageApp, 'src-tauri/tauri.windows.conf.json'), { bundle: { resources: [] } });
   if (target === 'android-arm64') {
-    override.bundle.createUpdaterArtifacts = false;
-    override.bundle.android = { versionCode: release.code };
     // 签名密码由环境读取，不写入 keystore.properties；原签名块改读该环境变量。
     const gradle = path.join(stageApp, 'src-tauri/gen/android/app/build.gradle.kts');
     let source = await readFile(gradle, 'utf8');
@@ -159,8 +194,6 @@ export async function buildClient(profile, local, version, passwords) {
     await writeFile(path.join(stageApp, 'src-tauri/gen/android/keystore.properties'),
       `# Selfhost build: local key path only; password is not persisted.\nkeyAlias=${local.androidAlias}\nstoreFile=${local.androidKey.replaceAll('\\', '/') }\n`, { mode: 0o600 });
   }
-  const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
-  await saveJson(config, override);
   const args = target === 'darwin-aarch64' ? ['build', '--target', 'aarch64-apple-darwin', '--bundles', 'dmg'] :
     target === 'windows-x86_64' ? ['build', '--target', 'x86_64-pc-windows-msvc', '--bundles', 'nsis'] :
       ['android', 'build', '--target', 'aarch64', '--apk'];

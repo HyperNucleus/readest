@@ -305,3 +305,9 @@ export const accessPolicy = {
 升级已有服务器时，除重新构建应用外，还需安装新生成的 Nginx 配置并检查、重载 Nginx。新配置对 `/rest/v1/` 增加 `auth_request`，通过应用的 `/api/auth/access` 使用同一开关验证请求；认证服务 `/auth/v1/` 保持可达。不要把 Kong、数据库或 MinIO 管理端口直接开放到公网。
 
 开启时公开分享页面、分享元数据及下载入口也需要登录。已有签发的对象存储预签名 URL 仍是有效期内的访问凭据，关闭阅读器不会撤销它们；对象存储桶应保持私有。第三方 Webhook、定时任务及只携带设备专用凭据的插件不会绕过统一鉴权，需要本站有效访问令牌，或关闭此开关后使用其原有鉴权。
+
+### Android 个人包名初始化
+
+Android 初始化与构建使用同一份 `tauri.personal.conf.json`。每次构建只清理 `.selfhost/build-source` 中的 Android 生成工程，按个人 `appId` 重新初始化，再恢复仓库手写的 Activity、资源和 Gradle 配置，并迁移 Java/Kotlin 包目录。不会删除原工作区的 `src-tauri/gen/android` 或签名密钥。
+
+如果旧版本在 `tauri android init` 后提示个人包路径不存在（例如 `java/top/hypernucleus/readest`），更新脚本后重新运行 `pnpm selfhost` →「编译当前平台客户端」即可，无需手动改包名或删除原项目。未成功发布的版本可以继续使用原版本号。

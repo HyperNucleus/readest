@@ -109,6 +109,16 @@ export async function generateServer(s) {
   };
   bindVolume('db', '/var/lib/postgresql/data', 'postgres');
   bindVolume('db', '/etc/postgresql-custom', 'postgres-config');
+  // bind mount 不像命名卷那样自动复制镜像内容；先补齐默认配置，且不覆盖已有配置。
+  compose.services['db-config-init'] = {
+    image: compose.services.db.image,
+    user: '0:0',
+    entrypoint: ['/bin/sh', '-c'],
+    command: ['cp -an /etc/postgresql-custom/. /readest-postgres-config/'],
+    volumes: [{ type: 'bind', source: path.join(s.dataDir, 'postgres-config'), target: '/readest-postgres-config' }],
+    restart: 'no',
+  };
+  compose.services.db.depends_on = { 'db-config-init': { condition: 'service_completed_successfully' } };
   bindVolume('minio', '/data', 'objects');
   delete compose.volumes;
   // 源码构建本分支，不能悄悄拉取官方镜像覆盖自定义功能。

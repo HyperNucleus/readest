@@ -26,6 +26,9 @@ pnpm selfhost
 这是第三方预编译镜像，包含 2025-10-15 的权限提升漏洞修复与 `mc` 工具；
 用于替代已无法公开拉取的官方 Quay 镜像。Docker Hub 镜像加速沿用宿主机配置。
 生成的 `compose.json` 中两个 `image` 字段由 `server.mjs` 统一设置，后续重新配置不会退回旧源。
+`db-config-init` 在数据库启动前，将同版本 PostgreSQL 镜像的默认配置复制到项目的
+`postgres-config` 目录，仅补齐缺失文件、不覆盖现有文件。项目目录使用 bind mount，
+没有 Docker 命名卷的自动填充行为，因此需要这一步才能完成首次数据库初始化。
 
 安全依赖已升级：Next.js 从 16.4.2 升至 16.4.6，修复
 [GHSA-mfr8-8qww-v76h](https://github.com/advisories/GHSA-mfr8-8qww-v76h)。

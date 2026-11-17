@@ -20,6 +20,13 @@ pnpm selfhost
 或安装操作系统工具链。更新源码时，先在这条分支执行自己的 Git 同步流程，再启动向导。
 服务器用当前检出的源码构建 `readest-selfhost:local`，不拉取官方客户端镜像。
 
+个人部署的 MinIO 与建桶服务使用 Coollabs 从官方源码编译的
+`coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`，固定镜像摘要为
+`sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9`。
+这是第三方预编译镜像，包含 2025-10-15 的权限提升漏洞修复与 `mc` 工具；
+用于替代已无法公开拉取的官方 Quay 镜像。Docker Hub 镜像加速沿用宿主机配置。
+生成的 `compose.json` 中两个 `image` 字段由 `server.mjs` 统一设置，后续重新配置不会退回旧源。
+
 安全依赖已升级：Next.js 从 16.4.2 升至 16.4.6，修复
 [GHSA-mfr8-8qww-v76h](https://github.com/advisories/GHSA-mfr8-8qww-v76h)。
 实验性 Vite 服务端使用的 `react-server-dom-webpack` 从 19.2.8 升至 19.2.9，修复

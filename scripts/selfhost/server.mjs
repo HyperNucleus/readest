@@ -89,6 +89,11 @@ export async function generateServer(s) {
   await writeFile(empty, '', { mode: 0o600 });
   const resolved = await run('docker', ['compose', '--env-file', empty, '-f', path.join(ROOT, 'docker/compose.yaml'), 'config', '--format', 'json'], { env: serverEnvironment(s), capture: true });
   const compose = JSON.parse(resolved);
+  // 官方 MinIO 镜像已不可拉取；使用用户确认的 Coollabs 修复版，并固定摘要防止标签漂移。
+  // 同一镜像内含 mc，初始化服务继续使用上游的 /bin/sh 与 mc 建桶命令。
+  const minioImage = 'coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9';
+  compose.services.minio.image = minioImage;
+  compose.services['minio-setup'].image = minioImage;
   compose.name = 'readest-selfhost';
   for (const [name, service] of Object.entries(compose.services)) {
     if (service.container_name) service.container_name = `readest-selfhost-${name}`;

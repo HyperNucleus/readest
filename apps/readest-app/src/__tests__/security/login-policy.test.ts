@@ -185,3 +185,25 @@ it.each([
 ])('rejects unsafe login redirects: %s', (path) => {
   expect(safeAuthRedirect(path)).toBe('/library');
 });
+
+it('accepts same-site logout behind a reverse proxy using the configured public origin', () => {
+  vi.stubEnv('API_BASE_URL', 'https://reader.example');
+  try {
+    const request = new NextRequest('http://localhost:3000/api/auth/session', {
+      method: 'DELETE',
+      headers: { origin: 'https://reader.example' },
+    });
+    expect(DELETE(request).status).toBe(200);
+    expect(DELETE(request).headers.get('set-cookie')).toContain('Secure');
+    expect(
+      DELETE(
+        new NextRequest('http://localhost:3000/api/auth/session', {
+          method: 'DELETE',
+          headers: { origin: 'https://attacker.example' },
+        }),
+      ).status,
+    ).toBe(403);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});

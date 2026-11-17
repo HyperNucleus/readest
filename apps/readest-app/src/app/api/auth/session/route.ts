@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SESSION_COOKIE, AUTH_HEADER } from '@/config/accessPolicy';
-import { verifyAccessToken } from '@/utils/serverAuth';
+import { getRequestOrigin, verifyAccessToken } from '@/utils/serverAuth';
 
 export async function POST(request: NextRequest) {
   // Never accept an ambient cookie as proof when establishing a new session.
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   );
   response.cookies.set(SESSION_COOKIE, user ? token! : '', {
     httpOnly: true,
-    secure: request.nextUrl.protocol === 'https:',
+    secure: new URL(getRequestOrigin(request)).protocol === 'https:',
     sameSite: 'strict',
     path: '/',
     // JWT validity is checked on every request, independently of cookie lifetime.
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
 }
 
 export function DELETE(request: NextRequest) {
-  if (request.headers.get('origin') !== request.nextUrl.origin) {
+  if (request.headers.get('origin') !== getRequestOrigin(request)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   const response = NextResponse.json(
@@ -36,7 +36,7 @@ export function DELETE(request: NextRequest) {
   );
   response.cookies.set(SESSION_COOKIE, '', {
     httpOnly: true,
-    secure: request.nextUrl.protocol === 'https:',
+    secure: new URL(getRequestOrigin(request)).protocol === 'https:',
     sameSite: 'strict',
     path: '/',
     maxAge: 0,

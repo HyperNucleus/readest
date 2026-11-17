@@ -50,18 +50,37 @@ export function anonKey(value) {
   throw new Error('需要 role=anon 的公开 JWT，不能填写 service_role 管理员密钥');
 }
 
+// 身份字段的校验同时供输入框和配置导入使用，在生成密钥之前就能纠正无效输入。
+export function applicationId(value) {
+  if (typeof value !== 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$/.test(value) ||
+    value === 'com.bilingify.readest') throw new Error('请使用独立的反向域名应用 ID');
+  return value;
+}
+
+// 协议按完整名称注册：readest-h 与 readest 不冲突，只排除官方实际占用的名称。
+export function applicationScheme(value) {
+  if (typeof value !== 'string' || !/^[a-z][a-z0-9-]{2,40}$/.test(value) ||
+    ['readest', 'readest-onedrive'].includes(value)) {
+    throw new Error('协议需为 3–41 位小写字母、数字或短横线，以字母开头；不能使用 readest 或 readest-onedrive');
+  }
+  return value;
+}
+
+// 应用显示名称也决定安装路径，必须在向导输入时阻止官方同名和文件名保留字符。
+export function applicationName(value) {
+  if (typeof value !== 'string' || !value.trim() || value.trim().toLowerCase() === 'readest' ||
+    /[\x00-\x1f<>:"/\\|?*]/.test(value) || /[. ]$/.test(value)) {
+    throw new Error('应用名称不能为空或包含文件名保留字符');
+  }
+  return value;
+}
+
 // 独立应用 ID/协议避免覆盖官方安装；版本号拒绝未知格式，便于后续迁移配置。
 export function clientProfile(value) {
   if (value?.version !== 1) throw new Error('不支持的客户端配置版本');
-  if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$/.test(value.appId) ||
-    value.appId === 'com.bilingify.readest') throw new Error('请使用独立的反向域名应用 ID');
-  if (!/^[a-z][a-z0-9-]{2,40}$/.test(value.scheme) || value.scheme.startsWith('readest')) {
-    throw new Error('请使用独立的登录回跳协议（不要以 readest 开头）');
-  }
-  if (typeof value.appName !== 'string' || !value.appName.trim() || value.appName.trim().toLowerCase() === 'readest' ||
-    /[\x00-\x1f<>:"/\\|?*]/.test(value.appName) || /[. ]$/.test(value.appName)) {
-    throw new Error('应用名称不能为空或包含文件名保留字符');
-  }
+  applicationId(value.appId);
+  applicationScheme(value.scheme);
+  applicationName(value.appName);
   const key = Buffer.from(value.updaterPublicKey ?? '', 'base64').toString().trim().split('\n');
   if (key.length !== 2 || !key[0].startsWith('untrusted comment:') ||
     Buffer.from(key[1], 'base64').length !== 42) throw new Error('需要 Tauri 更新公钥文件的内容');

@@ -3,7 +3,7 @@
 import { readFile, mkdir, access, statfs, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { ROOT, APP, STATE, httpsOrigin, clientProfile, loadJson, saveJson, serverDirectories } from './config.mjs';
+import { ROOT, APP, STATE, httpsOrigin, clientProfile, loadJson, saveJson, serverDirectories, applicationName, applicationId, applicationScheme } from './config.mjs';
 import { run, locked, prepareSources } from './process.mjs';
 import { newSecrets, generateServer, deploy, account, backup, restore, SERVER_FILE, COMPOSE_FILE, composeRun } from './server.mjs';
 import { buildClient, releaseVersion } from './build.mjs';
@@ -73,12 +73,12 @@ async function interactive() {
     return (await readFile(`${key}.pub`, 'utf8')).trim();
   }
 
-  // 应用身份在首轮确定；后续改动会在汇总中提示这将成为不同安装。
+  // 身份逐项即时校验，再进入密钥生成；避免整轮填写结束后才拒绝名称、ID 或协议。
   async function identity(previous = {}) {
     return {
-      appName: await ask('独立应用显示名称', previous.appName || 'Personal Reader'),
-      appId: await ask('独立应用 ID（反向域名，长期保持）', previous.appId || 'org.personal.reader'),
-      scheme: await ask('独立登录/打开应用协议（不要以 readest 开头）', previous.scheme || 'personal-reader'),
+      appName: await ask('独立应用显示名称', previous.appName || 'Personal Reader', applicationName),
+      appId: await ask('独立应用 ID（反向域名，长期保持）', previous.appId || 'org.personal.reader', applicationId),
+      scheme: await ask('独立登录/打开应用协议（例如 readest-h；不能使用官方完整协议名）', previous.scheme || 'personal-reader', applicationScheme),
       updaterPublicKey: await publicKey(previous.updaterPublicKey),
     };
   }

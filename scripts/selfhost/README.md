@@ -44,6 +44,13 @@ pnpm selfhost
 6. 选择“创建账号/重置密码”创建自己的邮箱密码账号。公开注册、匿名账号、SMTP 均关闭。
 7. 导出客户端公开配置，将其传到 Mac 和 Windows 并在各自向导中导入。
 
+独立回跳协议可以使用 `readest-h`：系统按完整协议名区分应用，不会与官方 `readest`
+冲突；官方已占用的 `readest`、`readest-onedrive` 仍不允许使用。名称、应用 ID 和协议
+在输入时立即校验，错误不会留到整轮配置完成后才提示。
+如果之前配置失败但已经生成签名密钥，重试时选择“读取已有 Tauri .pub 公钥文件”，
+填写 `.selfhost/keys/update.key.pub`，保留原来的私钥和密码；不要重新生成或删除密钥。
+只有显示“配置已保存”后，才会有可用于安装到 Nginx 的 `.selfhost/nginx.conf`。
+
 项目内目录布局（全部被 Git 和 Docker 构建上下文排除）：
 
 ```text

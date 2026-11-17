@@ -87,6 +87,17 @@ test('rejects official app identity and unsupported profile versions', () => {
   assert.throws(() => clientProfile({ ...profile(), version: 2 }));
 });
 
+// 共享名称前缀不等于占用同一协议；复现 readest-h 在整轮填写后被误拒绝的问题。
+test('accepts a distinct readest-prefixed callback scheme while rejecting official schemes', () => {
+  const personal = { ...profile(), appName: 'ReadestH', appId: 'top.example.readest', scheme: 'readest-h' };
+  assert.doesNotThrow(() => clientProfile(personal));
+  assert.equal(clientProfile(personal).scheme, 'readest-h');
+  for (const scheme of ['readest', 'readest-onedrive', 'com.googleusercontent.apps.example',
+    'Readest-H', 'readest-h://', 'readest h', '', 'a'.repeat(42)]) {
+    assert.throws(() => clientProfile({ ...personal, scheme }), undefined, scheme);
+  }
+});
+
 // 验证实际磁盘权限和覆盖行为，而不只检查实现文本。
 test('saved configuration replaces cleanly and is private on POSIX', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'readest-selfhost-'));

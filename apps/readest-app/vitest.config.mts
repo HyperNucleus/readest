@@ -40,6 +40,11 @@ export default defineConfig({
     },
   },
   test: {
+    // Recent Node versions expose native Web Storage, which prevents Vitest
+    // from installing jsdom's storage. Disable it only where the flag exists.
+    execArgv: process.allowedNodeEnvironmentFlags.has('--no-experimental-webstorage')
+      ? ['--no-experimental-webstorage']
+      : [],
     // Match PR CI's budget: more workers can push CPU-heavy tests past 5s
     // on shared machines (#7239). Override with --maxWorkers when needed.
     maxWorkers: 4,

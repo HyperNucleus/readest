@@ -19,6 +19,8 @@ const exportOutput = appPlatform !== 'web' && !isDev;
 // local `build-web` (output undefined), dev, and the Cloudflare/OpenNext
 // deploy — which forces standalone itself via NEXT_PRIVATE_STANDALONE.
 const standaloneOutput = !exportOutput && process.env['BUILD_STANDALONE'] === 'true';
+// 只对个人 Docker 构建启用低内存模式，避免影响原生客户端和其他网页构建。
+const personalServerBuild = standaloneOutput && process.env['NEXT_PUBLIC_PERSONAL'] === 'true';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -43,6 +45,10 @@ const nextConfig = {
   },
   devIndicators: false,
   experimental: {
+    // 分离 Webpack 编译进程并减少预渲染并发，降低小内存服务器的构建峰值；保留类型检查。
+    ...(personalServerBuild
+      ? { webpackMemoryOptimizations: true, webpackBuildWorker: true, cpus: 1 }
+      : {}),
     // Dev caching is on by default since Next 16.1. We deliberately turn OFF
     // Turbopack's build cache, which Next 16.4 enables by default: a build
     // interrupted mid-compile leaves a partial cache that the next build
@@ -78,6 +84,11 @@ const nextConfig = {
   serverExternalPackages: ['isows'],
   allowedDevOrigins: ['192.168.2.120'],
   webpack: (config, { isServer }) => {
+    // 一次性容器构建不保留 Webpack 缓存，并串行处理模块，避免缓存与并行任务叠加占用内存。
+    if (personalServerBuild) {
+      config.cache = false;
+      config.parallelism = 1;
+    }
     config.resolve.alias = {
       ...config.resolve.alias,
       nunjucks: 'nunjucks/browser/nunjucks.js',

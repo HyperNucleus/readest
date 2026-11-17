@@ -51,6 +51,38 @@ pnpm selfhost
 填写 `.selfhost/keys/update.key.pub`，保留原来的私钥和密码；不要重新生成或删除密钥。
 只有显示“配置已保存”后，才会有可用于安装到 Nginx 的 `.selfhost/nginx.conf`。
 
+### 小内存服务器通过 sudo 部署
+
+个人 Docker 构建使用 Webpack、内存优化、独立编译 worker 和单个预渲染 worker，
+关闭 Webpack 缓存并串行处理模块，减少一次性容器构建的内存占用。
+单个 Node 进程的堆上限为 3 GiB；类型检查继续执行。这些设置仅作用于个人服务端镜像，
+不改变 macOS/Android 构建。Node 堆上限不是整个构建的内存上限，仍需独立 BuildKit 限制。
+
+没有 Docker 用户组权限时，完成向导配置后，可用以下命令代替“部署/更新服务端”。
+首次创建专用构建器（不设为系统默认；最多 2 核、4 GiB，memory-swap 等于 memory 表示禁用 swap）：
+
+```bash
+sudo docker buildx create --name readest-selfhost-builder --driver docker-container \
+  --driver-opt memory=4g,memory-swap=4g,cpu-period=100000,cpu-quota=200000
+```
+
+如果构建器已存在，先用 `sudo docker buildx inspect readest-selfhost-builder` 检查，
+不要重复创建。需要镜像加速时，将可信镜像源写入 `.selfhost/buildkitd.toml`，创建时添加
+`--buildkitd-config "$PWD/.selfhost/buildkitd.toml"`；独立 BuildKit 不自动继承 Docker 的镜像源。
+每次更新在仓库根目录执行：
+
+```bash
+sudo docker compose -p readest-selfhost -f .selfhost/compose.json \
+  build --builder readest-selfhost-builder client
+sudo docker compose -p readest-selfhost -f .selfhost/compose.json \
+  up -d --no-build --wait --wait-timeout 180
+sudo docker compose -p readest-selfhost -f .selfhost/compose.json \
+  exec -T db /docker-entrypoint-initdb.d/zz-readest-migrations.sh
+```
+
+仅在上一条命令成功后继续下一条；构建失败时不启动新版本。向导中的普通部署菜单
+不会自动选择这个构建器或提权，使用上述命令才能保留这里的资源限制。
+
 项目内目录布局（全部被 Git 和 Docker 构建上下文排除）：
 
 ```text

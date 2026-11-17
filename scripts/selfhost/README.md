@@ -323,3 +323,16 @@ Android 初始化与构建使用同一份 `tauri.personal.conf.json`。每次构
 ### macOS 缺少自动更新包
 
 macOS 个人构建同时请求 `--bundles app,dmg`，生成 DMG 安装包以及 `.app.tar.gz` 和 `.sig` 自动更新产物。仅请求 `dmg` 时，Tauri 不会生成自动更新包，最终收集产物就会失败。更新脚本后重新编译即可，未成功发布的版本可以继续使用原版本号。
+
+### Linux 构建资源保护
+
+从 `pnpm selfhost` 选择编译时，Linux 实际构建会进入独立的 systemd 用户 scope，覆盖前端、Rust、Gradle 及其子进程。需要 systemd 用户管理器和 cgroup v2；创建限制失败会终止，不会降级为无限制编译。SSH/tmux 中均可正常输入签名密码，密码通过 stdin 传入 worker，不写入命令参数或临时文件。
+
+- 内存软限制 4 GiB，硬限制 4500 MiB，swap 上限 512 MiB；达到硬限制且无法回收时可能结束整个构建组。
+- CPU 配额为 2 核，I/O 权重为 10（是否生效取决于内核和块设备调度器，不是带宽硬限速）。
+- Android Cargo 固定单任务；生成副本内 Gradle 堆上限 768 MiB、Metaspace 384 MiB、worker 为 1，关闭并行与持久 daemon，Kotlin 使用进程内编译。Gradle 仍可能使用一次性 JVM，其内存包含在整体限制内。
+- 外层向导和锁保留在 scope 之外；构建失败后仍能返回菜单并清理操作锁。不要直接执行内部 `build-worker.mjs`，那会绕过 scope 创建。
+
+资源记录每 5 秒写入 `.selfhost/build-logs/readest-build-*.scope.jsonl`，包括主机 meminfo/vmstat/PSI、构建组内存峰值、swap、OOM 计数、I/O 和进程内存状态。不会记录进程命令行、环境变量或签名密码。末尾记录退出码；被强制重启时可能没有末尾记录。目录中的旧诊断日志可在排查完成后手动清理。
+
+Cargo 同时在终端输出 `cargo::core::compiler::fingerprint` 的缓存失效原因，便于核对 Gradle 第二次调用为何重编译。限制旨在降低整机失去响应的风险，不保证 8 GB 服务机一定能完成构建；若组内 OOM，应换用资源更充足的构建机，避免直接移除限制重试。

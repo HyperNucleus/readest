@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ROOT, APP, STATE, clientProfile, loadJson, saveJson } from './config.mjs';
 import { run } from './process.mjs';
+import { protectedBuild } from './build-resources.mjs';
 
 // 版本统一用于三平台清单；限制为稳定版，Android versionCode 可确定性计算且递增。
 export function releaseVersion(value) {
@@ -151,8 +152,32 @@ export async function initializeAndroidProject(stageApp, config, tauri, sourceAp
   });
 }
 
+export async function configureAndroidResources(stageApp) {
+  const filename = path.join(stageApp, 'src-tauri/gen/android/gradle.properties');
+  const settings = {
+    'org.gradle.jvmargs': '-Xmx768m -XX:MaxMetaspaceSize=384m -Dfile.encoding=UTF-8',
+    'org.gradle.workers.max': '1',
+    'org.gradle.parallel': 'false',
+    'org.gradle.daemon': 'false',
+    'kotlin.compiler.execution.strategy': 'in-process',
+  };
+  const original = await readFile(filename, 'utf8');
+  const lines = original.split(/\r?\n/).filter((line) => {
+    const key = line.trim().split(/[\s=:]/, 1)[0];
+    return !Object.hasOwn(settings, key);
+  });
+  await writeFile(filename, lines.join('\n') + '\n' +
+    Object.entries(settings).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
+}
+
 // 编译副本复用已安装依赖，Rust 缓存放在 .selfhost 内；不复制本地环境文件或私钥。
 export async function buildClient(profile, local, version, passwords) {
+  const normalized = releaseVersion(version).version;
+  if (process.platform === 'linux') return protectedBuild({ profile, local, version: normalized, passwords });
+  return buildClientUnrestricted(profile, local, normalized, passwords);
+}
+
+export async function buildClientUnrestricted(profile, local, version, passwords) {
   const p = clientProfile(profile);
   const release = releaseVersion(version);
   const target = process.platform === 'darwin' ? 'darwin-aarch64' : process.platform === 'win32' ? 'windows-x86_64' : 'android-arm64';
@@ -176,12 +201,16 @@ export async function buildClient(profile, local, version, passwords) {
     env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16';
     env.CARGO_PROFILE_RELEASE_OPT_LEVEL = '2';
     env.CARGO_PROFILE_RELEASE_LTO = 'off';
+    env.CARGO_BUILD_JOBS = '1';
+    // Report why Cargo invalidates cached artifacts during Gradle's second invocation.
+    env.CARGO_LOG = 'cargo::core::compiler::fingerprint=info';
     override.bundle.createUpdaterArtifacts = false;
     override.bundle.android = { versionCode: release.code };
   }
   const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
   await saveJson(config, override);
   if (target === 'android-arm64') await initializeAndroidProject(stageApp, config, tauri);
+  if (target === 'android-arm64') await configureAndroidResources(stageApp);
   await applyIdentity(stageApp, p);
   // build.rs 原本无条件编译 Windows 缩略图 DLL；个人版不安装它，也无需执行这个嵌套构建。
   const rustBuild = path.join(stageApp, 'src-tauri/build.rs');

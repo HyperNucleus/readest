@@ -328,7 +328,7 @@ macOS 个人构建同时请求 `--bundles app,dmg`，生成 DMG 安装包以及 
 
 从 `pnpm selfhost` 选择编译时，Linux 实际构建会进入独立的 systemd 用户 scope，覆盖前端、Rust、Gradle 及其子进程。需要 systemd 用户管理器和 cgroup v2；创建限制失败会终止，不会降级为无限制编译。SSH/tmux 中均可正常输入签名密码，密码通过 stdin 传入 worker，不写入命令参数或临时文件。
 
-- 内存软限制 4 GiB，硬限制 4500 MiB，swap 上限 512 MiB；达到硬限制且无法回收时可能结束整个构建组。
+- 不设置内存软限流（`MemoryHigh=infinity`），保留硬限制 4500 MiB 和 swap 上限 512 MiB；达到硬限制且无法回收时可能结束整个构建组。低于 rustc 工作集的软限制曾导致进程整夜停在 `mem_cgroup_handle_over_high`，因此不能用这种软限流来代替明确的构建失败。
 - CPU 配额为 2 核，I/O 权重为 10（是否生效取决于内核和块设备调度器，不是带宽硬限速）。
 - Android Cargo 固定单任务；生成副本内 Gradle 堆上限 768 MiB、Metaspace 384 MiB、worker 为 1，关闭并行与持久 daemon，Kotlin 使用进程内编译。Gradle 仍可能使用一次性 JVM，其内存包含在整体限制内。
 - 外层向导和锁保留在 scope 之外；构建失败后仍能返回菜单并清理操作锁。不要直接执行内部 `build-worker.mjs`，那会绕过 scope 创建。

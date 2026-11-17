@@ -4,7 +4,9 @@ import path from 'node:path';
 import { ROOT, STATE } from './config.mjs';
 import { run } from './process.mjs';
 
-export const BUILD_LIMITS = ['MemoryHigh=4G', 'MemoryMax=4500M', 'MemorySwapMax=512M',
+// A high watermark below rustc's working set can stall it in reclaim indefinitely.
+// Keep the hard cap and group OOM policy, without soft-limit throttling.
+export const BUILD_LIMITS = ['MemoryHigh=infinity', 'MemoryMax=4500M', 'MemorySwapMax=512M',
   'OOMPolicy=kill', 'CPUQuota=200%', 'IOWeight=10'];
 
 export async function resourceSnapshot(group) {

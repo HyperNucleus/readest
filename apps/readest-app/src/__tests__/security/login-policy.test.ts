@@ -207,3 +207,17 @@ it('accepts same-site logout behind a reverse proxy using the configured public 
     vi.unstubAllEnvs();
   }
 });
+
+it('serves generated Serwist scripts without opening similarly named API routes', async () => {
+  expect(
+    (await middleware(new NextRequest('https://reader.example/swe-worker-f61931bc2770d10b.js')))
+      .status,
+  ).toBe(200);
+  expect(
+    (await middleware(new NextRequest('https://reader.example/api/swe-worker-f61931bc2770d10b.js')))
+      .status,
+  ).toBe(401);
+  expect(
+    (await middleware(new NextRequest('https://reader.example/swe-worker-private.js'))).status,
+  ).toBe(307);
+});

@@ -26,6 +26,7 @@ export async function middleware(request: NextRequest) {
     !isApi &&
     (isPublicAuthPage(path) ||
       path === '/runtime-config.js' ||
+      /^\/swe-worker-[a-f0-9]+\.js$/.test(path) ||
       ['/_next/', '/assets/', '/fonts/', '/images/', '/locales/', '/vendor/', '/workers/'].some(
         (prefix) => path.startsWith(prefix),
       ) ||

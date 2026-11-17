@@ -20,10 +20,14 @@ pnpm selfhost
 或安装操作系统工具链。更新源码时，先在这条分支执行自己的 Git 同步流程，再启动向导。
 服务器用当前检出的源码构建 `readest-selfhost:local`，不拉取官方客户端镜像。
 
-本次验证中，上游锁定的 Next.js 16.4.2 报告已知安全漏洞，并可能在构建末尾以
-`SecurityFatalError` 中止。公网部署前需先评估并升级到修复版本；本模块没有禁用
-该检查或自动修改上游依赖。客户端每次构建都会重建隔离源码目录，因此不能依赖
-临时的重试许可来解决此问题。
+安全依赖已升级：Next.js 从 16.4.2 升至 16.4.6，修复
+[GHSA-mfr8-8qww-v76h](https://github.com/advisories/GHSA-mfr8-8qww-v76h)。
+实验性 Vite 服务端使用的 `react-server-dom-webpack` 从 19.2.8 升至 19.2.9，修复
+[GHSA-xqc2-xf4c-x3h3](https://github.com/advisories/GHSA-xqc2-xf4c-x3h3)；
+`react` 与 `react-dom` 同步升至 19.2.9，满足该包的 peer 依赖约束。
+`pnpm-workspace.yaml` 同时固定 RSC 间接依赖，避免 vinext 保留旧漏洞版本。
+这些修改位于应用 `package.json`、工作区配置和根锁文件；JSON 不支持注释，故在此解释用途。
+构建保留 Next.js 安全检查，不依赖重试许可绕过漏洞提示。
 
 ## 先配置服务器
 

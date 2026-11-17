@@ -30,6 +30,8 @@ packageExtensions:
       harfbuzzjs: 0.10.0
 
 overrides:
+  # 修复 RSC 远程代码执行漏洞，并让 vinext 的间接依赖与 React 19.2.9 保持一致。
+  react-server-dom-webpack: '19.2.9'
   deepmerge-ts: '>=8.0.1 <9'
   'nanoid@3': '>=3.3.18 <4'
   'nanoid@5': '>=5.1.16 <6'

@@ -1,3 +1,6 @@
+// 个人部署从运行时/构建配置读取站点和更新源，保留原始默认值供上游构建使用。
+import { getRuntimeConfig } from './runtimeConfig';
+import { personalUpdateBaseUrl } from './personal';
 import {
   AnnotatorConfig,
   BookFont,
@@ -990,7 +993,12 @@ export const BOOK_IDS_SEPARATOR = '+';
 
 export const DOWNLOAD_READEST_URL = 'https://readest.com?utm_source=readest_web';
 
-export const READEST_WEB_BASE_URL = 'https://web.readest.com';
+// 分享及设备链接随自部署站点生成，避免链接把另一台设备带到官方网页。
+export const READEST_WEB_BASE_URL =
+  getRuntimeConfig()?.apiBaseUrl ||
+  process.env['API_BASE_URL'] ||
+  process.env['NEXT_PUBLIC_API_BASE_URL'] ||
+  'https://web.readest.com';
 export const READEST_NODE_BASE_URL = 'https://node.readest.com';
 
 export const SHARE_BASE_URL = `${READEST_WEB_BASE_URL}/s`;
@@ -1014,18 +1022,24 @@ export const SHARE_TOKEN_LENGTH = 22;
 export const SHARE_PRESIGN_TTL_SECONDS = 300;
 export const SHARE_CFI_MAX_LENGTH = 512;
 
-const LATEST_DOWNLOAD_BASE_URL = 'https://download.readest.com/releases';
+// 更新清单与发布说明跟随个人更新源，避免新版本覆盖自部署配置。
+const LATEST_DOWNLOAD_BASE_URL = personalUpdateBaseUrl() || 'https://download.readest.com/releases';
 
 export const READEST_UPDATER_FILE = `${LATEST_DOWNLOAD_BASE_URL}/latest.json`;
 
 export const READEST_CHANGELOG_FILE = `${LATEST_DOWNLOAD_BASE_URL}/release-notes.json`;
 
-export const READEST_NIGHTLY_UPDATER_FILE = 'https://download.readest.com/nightly/latest.json';
+// 个人部署只发布确认过的稳定版本；旧的 nightly 偏好也不会访问官方更新源。
+export const READEST_NIGHTLY_UPDATER_FILE = personalUpdateBaseUrl()
+  ? READEST_UPDATER_FILE
+  : 'https://download.readest.com/nightly/latest.json';
 
 // Public (verification) key, identical to src-tauri/tauri.conf.json `updater.pubkey`.
 // Used to verify nightly artifacts in the custom install flows (portable /
 // AppImage / Android). Safe to embed — it is a public key.
 export const READEST_UPDATER_PUBKEY =
+  // 自编译客户端使用自己的签名公钥，不能只替换下载地址。
+  process.env['NEXT_PUBLIC_UPDATER_PUBKEY'] ||
   'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFMEQ1QjE2OEU1NEIzNTEKUldSUnMxU09GbHNOdmpEaWFMT1crRFpEV2VORzQ2MklxaFc0M1R0ci9xY2c1bENXS0xhM1R1L2sK';
 
 export const READEST_PUBLIC_STORAGE_BASE_URL = 'https://storage.readest.com';

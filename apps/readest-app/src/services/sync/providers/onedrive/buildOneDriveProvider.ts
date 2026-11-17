@@ -10,6 +10,8 @@
  * half-built provider that would fail on first use.
  */
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+// 已确认首版不接入官方 OneDrive OAuth，避免重新注册或使用官方协议。
+import { isPersonalDeployment } from '@/services/personal';
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import type { FileSyncProvider } from '@/services/sync/file/provider';
 import { createOneDriveProvider, type FetchFn } from './OneDriveProvider';
@@ -35,6 +37,8 @@ const resolveFetch = (): FetchFn =>
   (isTauriAppPlatform() ? tauriFetch : globalThis.fetch) as unknown as FetchFn;
 
 export const buildOneDriveProvider = async (): Promise<FileSyncProvider | null> => {
+  // 首版个人构建没有注册 OneDrive 回跳协议，不恢复此提供方的后台任务。
+  if (isPersonalDeployment()) return null;
   // Web: token from the full-page redirect auth-code+PKCE flow, kept in
   // sessionStorage via the shared `PersistedOAuth` (webOneDriveTokenPersistence).
   // Buffered I/O (createOneDriveProvider omits the Tauri-only streaming methods

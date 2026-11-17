@@ -39,6 +39,10 @@ ARG NEXT_PUBLIC_API_BASE_URL
 ARG NEXT_PUBLIC_OBJECT_STORAGE_TYPE
 ARG NEXT_PUBLIC_STORAGE_FIXED_QUOTA
 ARG NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA
+# 个人部署构建时固定登录策略和更新/回跳地址，使静态预渲染与浏览器行为一致。
+ARG NEXT_PUBLIC_PERSONAL
+ARG NEXT_PUBLIC_UPDATER_BASE_URL
+ARG NEXT_PUBLIC_APP_SCHEME
 COPY --from=dependencies /app/node_modules /app/node_modules
 COPY --from=dependencies /app/apps/readest-app/node_modules /app/apps/readest-app/node_modules
 COPY --from=dependencies /app/apps/readest-app/public/vendor /app/apps/readest-app/public/vendor

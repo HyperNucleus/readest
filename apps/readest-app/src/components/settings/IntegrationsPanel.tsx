@@ -1,4 +1,6 @@
 import clsx from 'clsx';
+// 个人版尚未配置独立云盘 OAuth 身份，隐藏会使用官方回跳协议的入口。
+import { isPersonalDeployment } from '@/services/personal';
 import React, { useEffect, useState } from 'react';
 import { MdChevronRight } from 'react-icons/md';
 import {
@@ -799,29 +801,30 @@ const IntegrationsPanel: React.FC = () => {
             {/* Third-party providers are premium: every row carries the tier
                 badge; on a free plan the checkbox is disabled and opening a
                 row routes to the upgrade page instead of the config sub-page. */}
-            {(appService?.isDesktopApp ||
-              appService?.isAndroidApp ||
-              appService?.isIOSApp ||
-              // Web: only when a Web-type GIS client id is configured for this build.
-              (isWebAppPlatform() && !!getGoogleWebClientId())) && (
-              <CloudProviderRow
-                icon={RiGoogleLine}
-                title={_('Google Drive')}
-                status={gdriveStatus}
-                badge={premiumBadge}
-                checked={!!settings.googleDrive?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: gdriveConfigured,
-                  isEnabled: !!settings.googleDrive?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('gdrive', next)}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('gdrive') : navigateToProfile(router)
-                }
-                toggleLabel={_('Sync with Google Drive')}
-              />
-            )}
+            {!isPersonalDeployment() &&
+              (appService?.isDesktopApp ||
+                appService?.isAndroidApp ||
+                appService?.isIOSApp ||
+                // Web: only when a Web-type GIS client id is configured for this build.
+                (isWebAppPlatform() && !!getGoogleWebClientId())) && (
+                <CloudProviderRow
+                  icon={RiGoogleLine}
+                  title={_('Google Drive')}
+                  status={gdriveStatus}
+                  badge={premiumBadge}
+                  checked={!!settings.googleDrive?.enabled}
+                  canToggle={canToggleCloudProvider({
+                    isPremium: isCloudSyncPremium,
+                    isConfigured: gdriveConfigured,
+                    isEnabled: !!settings.googleDrive?.enabled,
+                  })}
+                  onToggle={(next) => toggleCloudProvider('gdrive', next)}
+                  onOpen={() =>
+                    isCloudSyncPremium ? setSubPage('gdrive') : navigateToProfile(router)
+                  }
+                  toggleLabel={_('Sync with Google Drive')}
+                />
+              )}
             <CloudProviderRow
               icon={RiCloudLine}
               title={_('WebDAV')}
@@ -852,29 +855,30 @@ const IntegrationsPanel: React.FC = () => {
               onOpen={() => (isCloudSyncPremium ? setSubPage('s3') : navigateToProfile(router))}
               toggleLabel={_('Sync with S3')}
             />
-            {(appService?.isDesktopApp ||
-              appService?.isAndroidApp ||
-              appService?.isIOSApp ||
-              // Web: only when a Web-type Microsoft client id is configured for this build.
-              (isWebAppPlatform() && !!getMicrosoftClientId())) && (
-              <CloudProviderRow
-                icon={RiMicrosoftLine}
-                title={_('OneDrive')}
-                status={onedriveStatus}
-                badge={premiumBadge}
-                checked={!!settings.onedrive?.enabled}
-                canToggle={canToggleCloudProvider({
-                  isPremium: isCloudSyncPremium,
-                  isConfigured: onedriveConfigured,
-                  isEnabled: !!settings.onedrive?.enabled,
-                })}
-                onToggle={(next) => toggleCloudProvider('onedrive', next)}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('onedrive') : navigateToProfile(router)
-                }
-                toggleLabel={_('Sync with OneDrive')}
-              />
-            )}
+            {!isPersonalDeployment() &&
+              (appService?.isDesktopApp ||
+                appService?.isAndroidApp ||
+                appService?.isIOSApp ||
+                // Web: only when a Web-type Microsoft client id is configured for this build.
+                (isWebAppPlatform() && !!getMicrosoftClientId())) && (
+                <CloudProviderRow
+                  icon={RiMicrosoftLine}
+                  title={_('OneDrive')}
+                  status={onedriveStatus}
+                  badge={premiumBadge}
+                  checked={!!settings.onedrive?.enabled}
+                  canToggle={canToggleCloudProvider({
+                    isPremium: isCloudSyncPremium,
+                    isConfigured: onedriveConfigured,
+                    isEnabled: !!settings.onedrive?.enabled,
+                  })}
+                  onToggle={(next) => toggleCloudProvider('onedrive', next)}
+                  onOpen={() =>
+                    isCloudSyncPremium ? setSubPage('onedrive') : navigateToProfile(router)
+                  }
+                  toggleLabel={_('Sync with OneDrive')}
+                />
+              )}
             {(appService?.isIOSApp || appService?.isMacOSApp) && (
               <CloudProviderRow
                 icon={RiAppleLine}

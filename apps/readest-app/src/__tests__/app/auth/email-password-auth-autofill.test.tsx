@@ -29,6 +29,21 @@ describe('EmailPasswordAuth autofill (#5499)', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    // 个人部署策略只在专门的用例启用，不影响原有注册/找回测试。
+    vi.unstubAllEnvs();
+  });
+
+  // 无 SMTP 且关闭公开注册的个人部署，保留登录但不展示不可用的邮件操作。
+  it('hides signup and recovery for personal deployments', () => {
+    vi.stubEnv('NEXT_PUBLIC_PERSONAL', 'true');
+    const { client } = createSupabaseMock();
+    const { queryByText, container } = render(
+      <EmailPasswordAuth supabaseClient={client} magicLink />,
+    );
+    expect(queryByText("Don't have an account? Sign up")).toBeNull();
+    expect(queryByText('Forgot your password?')).toBeNull();
+    expect(queryByText('Send a magic link email')).toBeNull();
+    expect(container.querySelector('input[name="password"]')).not.toBeNull();
   });
 
   it('signs in with credentials autofilled without React change events', async () => {

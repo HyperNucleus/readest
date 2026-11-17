@@ -225,7 +225,11 @@ export const getStoragePlanData = (token: string) => {
   const purchasedQuota = data['storage_purchased_bytes'] || 0;
   const runtimeConfig = getRuntimeConfig();
   const fixedQuota =
-    runtimeConfig?.storageFixedQuota ?? parseInt(process.env['STORAGE_FIXED_QUOTA'] ?? '0');
+    // Tauri 没有 Web 运行时配置，读取个人构建注入的公开配额作为后备。
+    runtimeConfig?.storageFixedQuota ??
+    parseInt(
+      process.env['STORAGE_FIXED_QUOTA'] ?? process.env['NEXT_PUBLIC_STORAGE_FIXED_QUOTA'] ?? '0',
+    );
   const planQuota = fixedQuota || DEFAULT_STORAGE_QUOTA[plan] || DEFAULT_STORAGE_QUOTA['free'];
   const quota = planQuota + purchasedQuota;
 
@@ -239,7 +243,13 @@ export const getStoragePlanData = (token: string) => {
 export const getTranslationQuota = (plan: UserPlan): number => {
   const runtimeConfig = getRuntimeConfig();
   const fixedQuota =
-    runtimeConfig?.translationFixedQuota ?? parseInt(process.env['TRANSLATION_FIXED_QUOTA'] ?? '0');
+    // 与存储配额一致，服务端/运行时值优先，静态客户端使用构建时的公开值。
+    runtimeConfig?.translationFixedQuota ??
+    parseInt(
+      process.env['TRANSLATION_FIXED_QUOTA'] ??
+        process.env['NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA'] ??
+        '0',
+    );
   return (
     fixedQuota || DEFAULT_DAILY_TRANSLATION_QUOTA[plan] || DEFAULT_DAILY_TRANSLATION_QUOTA['free']
   );

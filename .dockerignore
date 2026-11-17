@@ -26,6 +26,9 @@ docker/.env
 **/.env*.local
 
 # Local credentials and tooling state
+# 自部署配置、签名密钥和构建副本不能进入 Docker build context 或镜像。
+.selfhost
+**/.selfhost
 *.pem
 certs
 **/certs

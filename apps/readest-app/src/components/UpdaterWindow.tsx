@@ -11,6 +11,8 @@ import { Command } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
 import { desktopDir } from '@tauri-apps/api/path';
 import { isTauriAppPlatform } from '@/services/environment';
+// Android 自建更新也校验发布签名，再交给系统校验 APK 的长期签名证书。
+import { isPersonalDeployment } from '@/services/personal';
 import { useTranslator } from '@/hooks/useTranslator';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSearchParams } from 'next/navigation';
@@ -147,36 +149,20 @@ export const UpdaterContent = ({
           date: data.pub_date,
           body: data.notes,
           downloadAndInstall: async (onEvent) => {
-            await new Promise<void>(async (resolve, reject) => {
-              let downloaded = 0;
-              let total = 0;
-              await tauriDownload(downloadUrl, apkFilePath, (progress) => {
-                if (!onEvent) return;
-                if (!total && progress.total) {
-                  total = progress.total;
-                  onEvent({
-                    event: 'Started',
-                    data: { contentLength: total },
-                  });
-                } else if (downloaded > 0 && progress.progress === progress.total) {
-                  console.log('APK downloaded to', apkFilePath);
-                  onEvent?.({ event: 'Finished' });
-                  setTimeout(() => {
-                    resolve();
-                  }, 1000);
-                }
+            // 复用下载完成回调，不依赖进度事件次数或 Content-Length，避免小 APK 下载后卡住。
+            await downloadWithProgress(downloadUrl, apkFilePath, onEvent);
 
-                onEvent({
-                  event: 'Progress',
-                  data: { chunkLength: progress.progress - downloaded },
-                });
-                downloaded = progress.progress;
-              }).catch((error) => {
-                console.error('Download failed:', error);
-                reject(error);
-              });
-            });
-
+            // 稳定版 APK 使用与桌面相同的更新公钥，拒绝被替换或使用其他私钥签名的文件。
+            if (
+              isPersonalDeployment() &&
+              !(await verifyUpdateSignature(
+                apkFilePath,
+                data.platforms[platformKey]?.signature || '',
+                READEST_UPDATER_PUBKEY,
+              ))
+            ) {
+              throw new Error('Signature verification failed');
+            }
             const res = await installPackage({
               path: apkFilePath,
             });

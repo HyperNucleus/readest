@@ -19,7 +19,11 @@ export const getBaseUrl = () =>
   process.env['NEXT_PUBLIC_API_BASE_URL'] ??
   READEST_WEB_BASE_URL;
 export const getNodeBaseUrl = () =>
-  process.env['NEXT_PUBLIC_NODE_BASE_URL'] ?? READEST_NODE_BASE_URL;
+  // 自托管的 Node API 由同一 Next.js 服务提供，不能因漏配而回退到官方 Node 服务。
+  (getRuntimeConfig()?.selfHosted ? getRuntimeConfig()?.apiBaseUrl : undefined) ??
+  process.env['NODE_BASE_URL'] ??
+  process.env['NEXT_PUBLIC_NODE_BASE_URL'] ??
+  READEST_NODE_BASE_URL;
 
 /**
  * Whether window move/resize has to be driven from JS with pointer events.

@@ -1,0 +1,205 @@
+// 在隔离的源码副本中编译个人客户端；不临时改写用户的工作区或签名配置。
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { ROOT, APP, STATE, clientProfile, loadJson, saveJson } from './config.mjs';
+import { run } from './process.mjs';
+
+// 版本统一用于三平台清单；限制为稳定版，Android versionCode 可确定性计算且递增。
+export function releaseVersion(value) {
+  if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error('版本必须是 major.minor.patch，例如 0.12.21');
+  const parts = value.split('.').map(Number);
+  if (parts.some((v, i) => v > (i === 0 ? 2000 : 999))) throw new Error('版本分量过大');
+  return { version: parts.join('.'), code: parts[0] * 1000000 + parts[1] * 1000 + parts[2] };
+}
+
+// 客户端只注入公开配置；无论宿主环境是否配置了官方服务，都明确覆盖目标地址。
+export function clientEnvironment(profile) {
+  const p = clientProfile(profile);
+  return {
+    // 原工作区已执行 frozen install；副本复用依赖，禁止 pnpm 因目录不同而重装链接目标。
+    pnpm_config_verify_deps_before_run: 'false',
+    NEXT_PUBLIC_APP_PLATFORM: 'tauri', NEXT_PUBLIC_PERSONAL: 'true', NEXT_PUBLIC_SELF_HOSTED: 'true',
+    NEXT_PUBLIC_API_BASE_URL: p.serverUrl, NEXT_PUBLIC_NODE_BASE_URL: p.serverUrl,
+    NEXT_PUBLIC_SUPABASE_URL: p.serverUrl, NEXT_PUBLIC_SUPABASE_ANON_KEY: p.supabaseAnonKey,
+    NEXT_PUBLIC_OBJECT_STORAGE_TYPE: 's3', NEXT_PUBLIC_APP_SCHEME: p.scheme,
+    // 原生页面没有 Web runtime-config，公开配额需要在编译时注入。
+    NEXT_PUBLIC_STORAGE_FIXED_QUOTA: String(p.storageQuota), NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA: String(p.translationQuota),
+    NEXT_PUBLIC_UPDATER_BASE_URL: `${p.serverUrl}/updates`, NEXT_PUBLIC_UPDATER_PUBKEY: p.updaterPublicKey,
+    SENTRY_DSN: '', SENTRY_AUTH_TOKEN: '', NEXT_PUBLIC_POSTHOG_KEY: '',
+    SUPABASE_URL: p.serverUrl, SUPABASE_ANON_KEY: p.supabaseAnonKey, API_BASE_URL: p.serverUrl,
+  };
+}
+
+// 所有客户端使用同一更新公钥和独立协议；移除官方更新备用地址及官方 App Links 注册。
+export function tauriOverride(p, version) {
+  return {
+    productName: p.appName, mainBinaryName: 'personal-reader', identifier: p.appId, version,
+    build: { beforeBuildCommand: 'pnpm build' },
+    // 不安装使用官方 CLSID 的 Explorer 扩展；独立客户端避免改写官方安装的注册项。
+    bundle: { createUpdaterArtifacts: true, resources: [], macOS: { signingIdentity: '-' }, windows: { nsis: { installerHooks: null } } },
+    plugins: {
+      updater: { pubkey: p.updaterPublicKey, endpoints: [`${p.serverUrl}/updates/latest.json`] },
+      'deep-link': { desktop: { schemes: [p.scheme] }, mobile: [{ scheme: [p.scheme], appLink: false }] },
+    },
+  };
+}
+
+// 遍历源码/产物时跳过缓存与依赖，防止跟随 node_modules 链接修改真实工作区。
+export async function filesUnder(directory) {
+  const result = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isSymbolicLink() || ['node_modules', 'target', '.git', '.gradle', 'build'].includes(entry.name)) continue;
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...await filesUnder(filename));
+    else result.push(filename);
+  }
+  return result;
+}
+
+// 仅修改副本中的身份字面值，覆盖原生 widget/分享/登录链接中散落的官方协议。
+export async function applyIdentity(stageApp, p) {
+  const candidates = [
+    ...await filesUnder(path.join(stageApp, 'src')),
+    ...await filesUnder(path.join(stageApp, 'src-tauri/gen/android')),
+    ...await filesUnder(path.join(stageApp, 'src-tauri/plugins')),
+  ];
+  for (const filename of candidates) {
+    if (!/\.(ts|tsx|kt|kts|xml|pro)$/.test(filename) || filename.includes('__tests__')) continue;
+    const original = await readFile(filename, 'utf8');
+    let text = original.replaceAll('readest://', `${p.scheme}://`)
+      .replaceAll("'readest:'", `'${p.scheme}:'`)
+      .replaceAll('https://web.readest.com', p.serverUrl)
+      .replaceAll("'web.readest.com'", `'${new URL(p.serverUrl).hostname}'`);
+    if (filename.includes(`${path.sep}gen${path.sep}android${path.sep}`)) {
+      text = text.replaceAll('com.bilingify.readest', p.appId)
+        .replaceAll('android:scheme="readest"', `android:scheme="${p.scheme}"`);
+      // 手写的官方云盘 intent-filter 不受 Tauri deep-link 配置覆盖，需一并移除。
+      if (filename.endsWith('AndroidManifest.xml')) text = text.replace(/<intent-filter\b[^>]*>[\s\S]*?<\/intent-filter>/g, (block) =>
+        /android:scheme="(?:readest-onedrive|com\.googleusercontent\.)/.test(block) ? '<!-- Selfhost build: official cloud OAuth handlers are not registered. -->' : block);
+      // Android init 的字符串资源可能保留上游显示名，显式更新并做 XML 转义。
+      if (filename.endsWith('.xml')) text = text.replace(/(<string name="(?:app_name|main_activity_title)">)[\s\S]*?(<\/string>)/g,
+        (_match, start, end) => `${start}${p.appName.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}${end}`);
+    }
+    if (text !== original) {
+      // 在每个实际生成的代码文件也注明此处替换用于隔离官方版身份。
+      if (!filename.endsWith('.xml')) text = `// Selfhost build: app identity and deep links target the personal installation.\n${text}`;
+      else text = text.replace(/(<\?xml[^>]*>)/, '$1\n<!-- Selfhost build: personal application identity and deep links. -->');
+      await writeFile(filename, text);
+    }
+  }
+}
+
+// 把副本准备与原生编译分开，使同一目录可先验证前端构建与身份替换。
+export async function prepareBuildSource() {
+  const stage = path.join(STATE, 'build-source');
+  const stageApp = path.join(stage, 'apps/readest-app');
+  await rm(stage, { recursive: true, force: true });
+  const excluded = new Set(['.git', '.selfhost', 'node_modules', 'target', '.next', 'out', '.gradle', 'build', '.claude', '.agents']);
+  const filter = (source) => {
+    const name = path.basename(source);
+    // 也排除上游 Docker 的本机 .env 与常见私钥扩展，副本只需要公开构建配置。
+    return !excluded.has(name) && source !== path.join(ROOT, 'docker/.env') &&
+      !/^\.env.*\.local$/.test(name) && !/\.(jks|keystore|pem|key)$/.test(name) && name !== 'keystore.properties';
+  };
+  // 分别复制顶层条目，避免 fs.cp 拒绝把根目录递归复制到自身的子目录。
+  await mkdir(stage, { recursive: true });
+  for (const entry of await readdir(ROOT)) {
+    const source = path.join(ROOT, entry);
+    if (filter(source)) await cp(source, path.join(stage, entry), { recursive: true, filter });
+  }
+  // 使用链接而非复制 pnpm 的符号链接树，确保依赖指向原有安装且不重复占用空间。
+  const { symlink } = await import('node:fs/promises');
+  for (const relative of ['node_modules', 'apps/readest-app/node_modules', 'packages/foliate-js/node_modules']) {
+    await symlink(path.join(ROOT, relative), path.join(stage, relative), process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  return { stage, stageApp };
+}
+
+// 编译副本复用已安装依赖，Rust 缓存放在 .selfhost 内；不复制本地环境文件或私钥。
+export async function buildClient(profile, local, version, passwords) {
+  const p = clientProfile(profile);
+  const release = releaseVersion(version);
+  const target = process.platform === 'darwin' ? 'darwin-aarch64' : process.platform === 'win32' ? 'windows-x86_64' : 'android-arm64';
+  if (process.platform === 'darwin' && process.arch !== 'arm64') throw new Error('当前只配置了 Apple Silicon 构建');
+  const privateKey = await readFile(local.signingKey, 'utf8');
+  const { stageApp } = await prepareBuildSource();
+  const pkg = await loadJson(path.join(stageApp, 'package.json'));
+  pkg.version = release.version;
+  await saveJson(path.join(stageApp, 'package.json'), pkg);
+  const env = { ...clientEnvironment(p), TAURI_SIGNING_PRIVATE_KEY: privateKey,
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: passwords.update, CARGO_TARGET_DIR: path.join(STATE, 'target'),
+    CARGO_BUILD_JOBS: String(local.jobs), JAVA_HOME: local.javaHome || process.env.JAVA_HOME,
+    ANDROID_HOME: local.androidHome || process.env.ANDROID_HOME, NDK_HOME: local.ndkHome || process.env.NDK_HOME,
+    READEST_KEY_PASSWORD: passwords.android ?? '',
+  };
+  const tauri = (args) => run('pnpm', ['exec', 'tauri', ...args], { cwd: stageApp, env });
+  if (target === 'android-arm64') {
+    // 先生成 Gradle 工程，再覆盖回仓库已有的原生实现，避免 init 模板替换 MainActivity。
+    await tauri(['android', 'init']);
+    await cp(path.join(APP, 'src-tauri/gen/android/app'), path.join(stageApp, 'src-tauri/gen/android/app'), { recursive: true });
+  }
+  await applyIdentity(stageApp, p);
+  const override = tauriOverride(p, release.version);
+  // build.rs 原本无条件编译 Windows 缩略图 DLL；个人版不安装它，也无需执行这个嵌套构建。
+  const rustBuild = path.join(stageApp, 'src-tauri/build.rs');
+  const rustSource = await readFile(rustBuild, 'utf8');
+  await writeFile(rustBuild, rustSource.replace('if target_os == "windows" {',
+    '// Selfhost build: skip the official Explorer extension for personal installations.\n    if target_os == "windows" && env::var("NEXT_PUBLIC_PERSONAL").as_deref() != Ok("true") {'));
+  // 主平台配置会自动合并 Windows resources，因此直接清空副本中的平台扩展配置。
+  if (target === 'windows-x86_64') await saveJson(path.join(stageApp, 'src-tauri/tauri.windows.conf.json'), { bundle: { resources: [] } });
+  if (target === 'android-arm64') {
+    override.bundle.createUpdaterArtifacts = false;
+    override.bundle.android = { versionCode: release.code };
+    // 签名密码由环境读取，不写入 keystore.properties；原签名块改读该环境变量。
+    const gradle = path.join(stageApp, 'src-tauri/gen/android/app/build.gradle.kts');
+    let source = await readFile(gradle, 'utf8');
+    source = source.replaceAll('keystoreProperties["password"] as String', 'System.getenv("READEST_KEY_PASSWORD")');
+    await writeFile(gradle, `// Selfhost build: signing passwords come only from the process environment.\n${source}`);
+    await writeFile(path.join(stageApp, 'src-tauri/gen/android/keystore.properties'),
+      `# Selfhost build: local key path only; password is not persisted.\nkeyAlias=${local.androidAlias}\nstoreFile=${local.androidKey.replaceAll('\\', '/') }\n`, { mode: 0o600 });
+  }
+  const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
+  await saveJson(config, override);
+  const args = target === 'darwin-aarch64' ? ['build', '--target', 'aarch64-apple-darwin', '--bundles', 'dmg'] :
+    target === 'windows-x86_64' ? ['build', '--target', 'x86_64-pc-windows-msvc', '--bundles', 'nsis'] :
+      ['android', 'build', '--target', 'aarch64', '--apk'];
+  await tauri([...args, '--config', config]);
+  // 只收集本次目标目录的产物，打包成带哈希和签名的发布目录，供 SSH 发布端核对。
+  const bundleDir = target === 'android-arm64' ? path.join(stageApp, 'src-tauri/gen/android/app/build/outputs/apk') :
+    path.join(STATE, 'target', target === 'darwin-aarch64' ? 'aarch64-apple-darwin' : 'x86_64-pc-windows-msvc', 'release/bundle');
+  const walk = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const result = [];
+    for (const e of entries) if (!e.isSymbolicLink()) {
+      const f = path.join(directory, e.name);
+      if (e.isDirectory()) result.push(...await walk(f)); else result.push(f);
+    }
+    return result;
+  };
+  const built = await walk(bundleDir);
+  const suffix = target === 'darwin-aarch64' ? '.app.tar.gz' : target === 'windows-x86_64' ? '.exe' : '.apk';
+  const matching = built.filter((f) => f.endsWith(suffix) && (target !== 'android-arm64' || f.includes('release')));
+  if (matching.length !== 1) throw new Error(`预期一个 ${suffix} 更新产物，实际 ${matching.length} 个；请检查构建输出`);
+  const artifact = matching[0];
+  // Android 的 APK 系统签名与 Tauri 更新签名各司其职；两种签名都保留。
+  if (target === 'android-arm64') await tauri(['signer', 'sign', artifact]);
+  const output = path.join(STATE, 'releases', release.version, target);
+  await mkdir(output, { recursive: true });
+  const name = `${target}${suffix}`;
+  await cp(artifact, path.join(output, name));
+  const signature = (await readFile(`${artifact}.sig`, 'utf8')).trim();
+  const artifacts = [{ name, sha256: createHash('sha256').update(await readFile(artifact)).digest('hex') }];
+  if (target === 'darwin-aarch64') {
+    const dmgs = built.filter((f) => f.endsWith('.dmg'));
+    if (dmgs.length !== 1) throw new Error('找不到唯一的 DMG 安装包');
+    await cp(dmgs[0], path.join(output, 'darwin-aarch64.dmg'));
+    artifacts.push({ name: 'darwin-aarch64.dmg', sha256: createHash('sha256').update(await readFile(dmgs[0])).digest('hex') });
+  }
+  await saveJson(path.join(output, 'release.json'), {
+    schema: 1, version: release.version, platform: target, appId: p.appId, serverUrl: p.serverUrl,
+    publicKey: p.updaterPublicKey, artifact: name, signature, artifacts,
+  });
+  console.log(`构建完成：${output}`);
+  return output;
+}

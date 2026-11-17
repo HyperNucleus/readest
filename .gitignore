@@ -1,5 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 docker/.env
+# 自部署向导保存服务端密钥、本机构建配置和发布产物；这些不进入 Git。
+/.selfhost/
 
 # dependencies
 /node_modules

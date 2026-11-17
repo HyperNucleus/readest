@@ -5,6 +5,8 @@ import { ReactNode } from 'react';
 import { PostHogProvider } from 'posthog-js/react';
 import { applyPostHogConsent, getTelemetryDecision } from '@/utils/telemetry';
 import { getAppVersion } from '@/utils/version';
+// 个人构建不初始化官方遥测 SDK，即使机器或旧设置曾选择启用遥测。
+import { isPersonalDeployment } from '@/services/personal';
 
 const posthogUrl =
   process.env['NEXT_PUBLIC_POSTHOG_HOST'] ||
@@ -22,7 +24,9 @@ let initialized = false;
  * file is loaded and `reconcileTelemetryConsent` has run (issue #6422).
  */
 export const initPostHog = () => {
+  // 个人部署无论旧的遥测偏好是什么，都不会连接官方 PostHog 项目。
   if (
+    isPersonalDeployment() ||
     initialized ||
     typeof window === 'undefined' ||
     process.env['NODE_ENV'] !== 'production' ||

@@ -7,6 +7,8 @@ export interface ReadestRuntimeConfig {
   translationFixedQuota?: number;
   fontBaseUrl?: string;
   selfHosted?: boolean;
+  // 个人部署关闭公开注册入口、邮件找回和官方遥测；不改变其他自托管实例的策略。
+  personal?: boolean;
 }
 
 declare global {
@@ -19,6 +21,10 @@ export const getRuntimeConfig = () =>
   typeof window === 'undefined' ? undefined : window.__READEST_RUNTIME_CONFIG;
 
 export const getServerRuntimeConfig = (): ReadestRuntimeConfig => ({
+  // Docker 在启动时设置此标志，浏览器通过既有 runtime-config.js 读取。
+  personal:
+    (process.env['READEST_PERSONAL'] || process.env['NEXT_PUBLIC_PERSONAL']) === 'true' ||
+    undefined,
   // Browser runtime config should prefer a public Supabase URL when provided.
   // SUPABASE_URL remains as a backward-compatible fallback for non-split setups.
   supabaseUrl:

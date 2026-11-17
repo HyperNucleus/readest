@@ -34,7 +34,8 @@ interface SingleInstancePayload {
 }
 
 const WEB_AUTH_CALLBACK = `${getBaseUrl()}/auth/callback`;
-const DEEPLINK_CALLBACK = 'readest://auth-callback';
+// 独立协议确保登录回跳进入个人版，而不是同时安装的官方版。
+const DEEPLINK_CALLBACK = `${process.env['NEXT_PUBLIC_APP_SCHEME'] || 'readest'}://auth-callback`;
 const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true';
 
 export default function AuthPage() {

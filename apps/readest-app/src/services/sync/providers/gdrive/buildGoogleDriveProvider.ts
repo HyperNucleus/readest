@@ -10,6 +10,8 @@
  * half-built provider that would fail on first use.
  */
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+// 已确认首版不接入官方 Google OAuth，后台恢复任务也不能初始化该提供方。
+import { isPersonalDeployment } from '@/services/personal';
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import type { FileSyncProvider } from '@/services/sync/file/provider';
 import { createGoogleDriveProvider, type FetchFn } from './GoogleDriveProvider';
@@ -53,6 +55,8 @@ const resolveFetch = (): FetchFn =>
   (isTauriAppPlatform() ? tauriFetch : globalThis.fetch) as unknown as FetchFn;
 
 export const buildGoogleDriveProvider = async (): Promise<FileSyncProvider | null> => {
+  // 首版个人构建没有注册 Google Drive 回跳协议，不恢复此提供方的后台任务。
+  if (isPersonalDeployment()) return null;
   // Web: token from the full-page redirect flow, kept in sessionStorage, read by
   // WebDriveAuth. Buffered I/O (createGoogleDriveProvider omits the Tauri-only
   // streaming methods off-Tauri); the Drive REST API is CORS-enabled so plain

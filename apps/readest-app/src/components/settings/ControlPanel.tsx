@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+// 个人构建不安装官方缩略图扩展，也不读取/修改其注册项。
+import { isPersonalDeployment } from '@/services/personal';
 import { invoke } from '@tauri-apps/api/core';
 import { useEnv } from '@/context/EnvContext';
 import { useReaderStore } from '@/store/readerStore';
@@ -100,7 +102,8 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   const [explorerThumbnailsError, setExplorerThumbnailsError] = useState(false);
 
   useEffect(() => {
-    if (!appService?.isWindowsApp) return;
+    // 避免个人版启动设置页时探测官方缩略图注册状态。
+    if (!appService?.isWindowsApp || isPersonalDeployment()) return;
     let cancelled = false;
     invoke<boolean>('get_explorer_thumbnails_enabled')
       .then((enabled) => {
@@ -818,7 +821,8 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
         />
       </BoxedList>
 
-      {appService?.isWindowsApp && (
+      {/* 个人版未安装此扩展，因此不提供会修改官方注册项的开关。 */}
+      {appService?.isWindowsApp && !isPersonalDeployment() && (
         <div>
           <BoxedList title={_('File Explorer')}>
             <SettingsSwitchRow

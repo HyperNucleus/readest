@@ -2,7 +2,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdir, writeFile, copyFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { ROOT, STATE, clientProfile, loadJson, saveJson } from './config.mjs';
+import { ROOT, STATE, clientProfile, loadJson, saveJson, serverDirectories } from './config.mjs';
 import { run, prepareSources } from './process.mjs';
 
 export const SERVER_FILE = path.join(STATE, 'server.json');
@@ -82,6 +82,8 @@ server {
 // 配置导出解析交给 Docker Compose，避免复制整份上游服务定义而遗漏迁移挂载。
 export async function generateServer(s) {
   if (process.platform !== 'linux') throw new Error('服务端配置生成/部署需要在 Linux 服务器执行');
+  // 部署和恢复也检查已保存路径，不能绕过向导把运行文件写进源码或密钥目录。
+  serverDirectories(s.dataDir, s.backupDir);
   await mkdir(STATE, { recursive: true, mode: 0o700 });
   const empty = path.join(STATE, 'empty.env');
   await writeFile(empty, '', { mode: 0o600 });
@@ -192,13 +194,15 @@ export async function backup(s) {
 }
 
 // 恢复只允许空数据目录，绝不清空现有书库；用户须先停止旧实例并选择新目录。
-export async function restore(directory, target) {
+export async function restore(directory, target, backupDirectory = path.join(STATE, 'backups')) {
+  // 迁移到另一处项目时重新定位备份目录，不沿用旧服务器仓库的绝对路径。
+  const destinations = serverDirectories(target, backupDirectory);
   const manifest = await loadJson(path.join(directory, 'manifest.json'));
   if (manifest.version !== 1 || manifest.platform !== process.arch) throw new Error('物理备份版本/CPU 架构不兼容');
   await mkdir(target, { recursive: true });
   if ((await readdir(target)).length) throw new Error('恢复目标必须是空目录');
   const server = await loadJson(path.join(directory, 'server.json'));
-  server.dataDir = target;
+  Object.assign(server, destinations);
   await run('docker', ['run', '--rm', '-v', `${target}:/data`, '-v', `${directory}:/backup:ro`, 'alpine:3.22', 'tar', 'xzpf', '/backup/data.tar.gz', '-C', '/data']);
   await saveJson(SERVER_FILE, server);
   // 恢复公开连接配置，使新服务器可继续验证后续 SSH 上传的安装包。

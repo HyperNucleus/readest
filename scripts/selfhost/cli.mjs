@@ -3,7 +3,7 @@
 import { readFile, mkdir, access, statfs, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { ROOT, APP, STATE, httpsOrigin, clientProfile, loadJson, saveJson } from './config.mjs';
+import { ROOT, APP, STATE, httpsOrigin, clientProfile, loadJson, saveJson, serverDirectories } from './config.mjs';
 import { run, locked, prepareSources } from './process.mjs';
 import { newSecrets, generateServer, deploy, account, backup, restore, SERVER_FILE, COMPOSE_FILE, composeRun } from './server.mjs';
 import { buildClient, releaseVersion } from './build.mjs';
@@ -89,19 +89,20 @@ async function interactive() {
     const previous = await loadJson(CLIENT_FILE, {});
     const serverUrl = httpsOrigin(await ask('公网 HTTPS 域名（不带路径）', old.serverUrl || '', httpsOrigin));
     const id = await identity(previous);
-    const dataDir = path.resolve(await ask('服务数据目录（由当前用户创建/管理）', old.dataDir || '/srv/readest', linuxPath));
-    const backupDir = path.resolve(await ask('备份目录（必须在数据目录之外）', old.backupDir || '/srv/readest-backups', linuxPath));
-    // 数据目录不能包含源码仓库；含服务端密钥的备份也不能落入 Git/Docker 未排除的位置。
-    if (backupDir === dataDir || backupDir.startsWith(`${dataDir}/`) || dataDir === ROOT || dataDir.startsWith(`${ROOT}/`) || ROOT.startsWith(`${dataDir}/`)) throw new Error('数据目录应与仓库分离，备份目录应在数据目录外');
-    if (backupDir.startsWith(`${ROOT}/`) && !backupDir.startsWith(`${STATE}/`)) throw new Error('备份请放在仓库外，或已排除 Git 的 .selfhost/ 内');
+    // 新部署集中在项目的私有目录；已有部署保留原路径，不把修改配置当成数据迁移。
+    const { dataDir, backupDir } = serverDirectories(
+      await ask('服务数据目录（默认在项目 .selfhost/data 内）', old.dataDir || path.join(STATE, 'data'), linuxPath),
+      await ask('备份目录（与数据目录分开）', old.backupDir || path.join(STATE, 'backups'), linuxPath),
+    );
     const ports = {};
     for (const [service, defaultPort] of [['client', 3000], ['kong', 8000], ['s3', 9000]]) ports[service] = await integer(`${service} 本机端口`, old.ports?.[service] || defaultPort, 1024, 65535);
     if (new Set(Object.values(ports)).size !== 3) throw new Error('三个服务端口不能重复');
     const domain = new URL(serverUrl).hostname;
     const s = {
       version: 1, serverUrl, ...id, dataDir, backupDir, ports,
-      certificate: await ask('Nginx TLS fullchain 文件', old.certificate || `/etc/letsencrypt/live/${domain}/fullchain.pem`, linuxPath),
-      certificateKey: await ask('Nginx TLS private key 文件', old.certificateKey || `/etc/letsencrypt/live/${domain}/privkey.pem`, linuxPath),
+      // Certbot 的配置、证书、工作文件与日志均可放在项目内，已有证书路径继续沿用。
+      certificate: await ask('Nginx TLS fullchain 文件', old.certificate || path.join(STATE, 'certbot/config/live', domain, 'fullchain.pem'), linuxPath),
+      certificateKey: await ask('Nginx TLS private key 文件', old.certificateKey || path.join(STATE, 'certbot/config/live', domain, 'privkey.pem'), linuxPath),
       storageQuota: (await integer('单账号书籍存储配额（MiB）', (old.storageQuota || 1073741824) / 1048576, 1, 1048576)) * 1048576,
       translationQuota: await integer('翻译配额（沿用项目的字符计数规则；需可用翻译服务）', old.translationQuota || 50000, 1, 100000000),
       fontBaseUrl: await optional('可选：自托管 CJK 字体目录 URL；留空用上游资源（其 CORS 可能不支持自定义域名）', old.fontBaseUrl),
@@ -234,12 +235,16 @@ async function interactive() {
         if (action === 'restore') {
           if (process.platform !== 'linux') throw new Error('请在 Linux 服务器恢复');
           const directory = path.resolve(await ask('可信备份目录', '', linuxPath));
-          const target = path.resolve(await ask('空数据目录', '/srv/readest-restored', linuxPath));
+          // 恢复位置也遵循项目内 data/backups 分离规则，并为新服务器重新选择备份目录。
+          const { dataDir: target, backupDir } = serverDirectories(
+            await ask('空数据目录', path.join(STATE, 'data'), linuxPath),
+            await ask('恢复后的备份目录', path.join(STATE, 'backups'), linuxPath),
+          );
           if (await exists(COMPOSE_FILE)) {
             const running = await composeRun(['ps', '--services', '--status', 'running'], { capture: true });
             if (running) throw new Error('请先停止当前自部署栈，再恢复到新目录');
           }
-          if (await summary('恢复此备份并替换本机服务端配置？备份含服务端密钥，只应使用可信备份。', { directory, target })) await restore(directory, target);
+          if (await summary('恢复此备份并替换本机服务端配置？备份含服务端密钥，只应使用可信备份。', { directory, target, backupDir })) await restore(directory, target, backupDir);
           return;
         }
         const s = await loadJson(SERVER_FILE);

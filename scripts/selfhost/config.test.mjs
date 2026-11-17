@@ -4,7 +4,32 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { clientProfile, saveJson, httpsOrigin } from './config.mjs';
+import { clientProfile, saveJson, httpsOrigin, serverDirectories, ROOT, STATE } from './config.mjs';
+
+// 项目内数据只能使用专用目录，避免备份递归包含自身或被构建副本清理误删。
+test('server data and backups can live in separate private project directories', () => {
+  const dataDir = path.join(STATE, 'data');
+  const backupDir = path.join(STATE, 'backups');
+  assert.doesNotThrow(() => serverDirectories(dataDir, backupDir));
+  assert.deepEqual(serverDirectories(dataDir, backupDir), { dataDir, backupDir });
+  assert.doesNotThrow(() => serverDirectories(path.join(dataDir, 'restored'), backupDir));
+});
+
+// 外部目录继续兼容，但源码、密钥和构建缓存不能成为运行数据或备份目标。
+test('server directories reject source trees, reserved state and overlapping backups', () => {
+  const data = path.join(STATE, 'data');
+  const backups = path.join(STATE, 'backups');
+  for (const unsafe of [ROOT, path.dirname(ROOT), STATE, path.join(ROOT, 'data'),
+    path.join(STATE, 'build-source'), path.join(STATE, 'keys'), path.join(STATE, 'data-other')]) {
+    assert.throws(() => serverDirectories(unsafe, backups), undefined, unsafe);
+  }
+  for (const unsafe of [data, path.join(data, 'backup'), STATE, path.join(ROOT, 'backups'), path.join(STATE, 'keys')]) {
+    assert.throws(() => serverDirectories(data, unsafe), undefined, unsafe);
+  }
+  const external = path.join(os.tmpdir(), 'readest-external');
+  assert.doesNotThrow(() => serverDirectories(path.join(external, 'data'), path.join(external, 'backups')));
+  assert.throws(() => serverDirectories(path.join(external, 'backups/data'), path.join(external, 'backups')));
+});
 
 // 测试 JWT 只用于角色校验，不使用任何实际部署凭据。
 const token = (role) => [

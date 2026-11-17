@@ -31,17 +31,94 @@ pnpm selfhost
 
 ## 先配置服务器
 
-1. 预先创建当前用户可写的数据和备份目录，例如 `/srv/readest`、`/srv/readest-backups`。
-   数据目录放在仓库外，备份目录必须在数据目录外。数据目录的父目录需要允许 Nginx
-   用户穿过；`updates/` 中的公开安装包需要可读。其余数据库/对象文件不应开放给 Nginx。
+1. 在仓库根目录创建 `.selfhost/data` 和 `.selfhost/backups`，新部署默认使用这两个目录。
+   运行数据、备份、配置、密钥、证书和构建产物都保存在项目内；工具链、下载缓存及
+   Docker 自身存储仍使用系统位置。数据和备份必须分开，不能互相包含。
 2. 运行“配置服务端”，填写 HTTPS 域名、独立名称/应用 ID/协议、目录、三个本机端口、
    TLS 证书路径、存储与翻译配额、可选字体地址和 OPDS 内网主机白名单。
 3. 首次可在服务器生成 Tauri 更新签名密钥（服务器也是 Android 构建机），或读取已有
    `.pub` 文件。密钥生成后单独备份；后续配置默认沿用，不自动轮换。
-4. 安装证书，将 `.selfhost/nginx.conf` 应用到你的 Nginx，先执行 `nginx -t` 再重载。
+4. 按下文在项目内申请证书，将 `.selfhost/nginx.conf` 链接到 Nginx 配置目录，
+   设置公开更新目录的访问权限，先执行 `nginx -t` 再重载。
 5. 选择“部署/更新服务端”。首次镜像构建可能较慢，完成后通过 HTTPS 域名访问。
 6. 选择“创建账号/重置密码”创建自己的邮箱密码账号。公开注册、匿名账号、SMTP 均关闭。
 7. 导出客户端公开配置，将其传到 Mac 和 Windows 并在各自向导中导入。
+
+项目内目录布局（全部被 Git 和 Docker 构建上下文排除）：
+
+```text
+.selfhost/
+  data/             # PostgreSQL、MinIO 和公开 updates/ 安装包
+  backups/          # 服务备份，包含服务端凭据
+  keys/             # 更新签名私钥和 Android keystore，另行备份
+  certbot/          # 证书、续期配置、工作目录和日志
+  releases/         # 各平台构建产物
+  build-source/     # 可重新生成的构建源码副本
+  target/           # Rust 编译缓存
+  server.json       # 服务端配置和密钥
+  client.json       # 客户端公开连接配置
+  local.json        # 本机构建及 SSH 配置
+  compose.json      # 生成的 Docker Compose 配置
+  nginx.conf        # 生成的 Nginx 站点配置
+```
+
+Ubuntu 首次部署，在仓库根目录执行；把示例域名换成你自己的域名，并先完成 DNS 解析：
+
+```bash
+install -d -m 700 .selfhost .selfhost/data .selfhost/backups
+sudo apt install -y certbot python3-certbot-nginx acl
+sudo certbot certonly --nginx -d books.example.com \
+  --config-dir "$PWD/.selfhost/certbot/config" \
+  --work-dir "$PWD/.selfhost/certbot/work" \
+  --logs-dir "$PWD/.selfhost/certbot/logs"
+pnpm selfhost
+```
+
+选择“配置服务端”。默认数据、备份和证书路径都是项目内的绝对路径，无需手写。
+仓库内的数据目录只允许 `.selfhost/data/` 子树，备份只允许 `.selfhost/backups/`
+子树，防止误用会被构建流程清理的目录。不要把这些目录符号链接到源码、密钥或彼此内部。
+已有的仓库外目录仍支持，重配时沿用现有值；**修改目录不会搬迁已有数据**。
+已有服务需先备份、停止服务，再通过“恢复到空数据目录”迁移，不能直接改路径后启动空库。
+
+生成配置后，在 Ubuntu 默认 Nginx 布局中建立链接（若已存在同名站点，先检查其内容）：
+
+```bash
+sudo ln -s "$PWD/.selfhost/nginx.conf" /etc/nginx/sites-enabled/readest-selfhost
+```
+
+Nginx 的 master 以 root 读取站点配置和证书；worker 只需要穿过祖先目录并读取
+公开 `updates/`。以下按 Ubuntu 默认 worker 用户 `www-data` 授予目录穿过权限，
+不递归开放 `.selfhost`，也不给 worker 读取私钥、配置和备份的权限。
+如果 Nginx `user` 指令使用其他用户，替换 `www-data` 后执行：
+
+```bash
+install -d -m 755 .selfhost/data/updates
+readest_path="$PWD/.selfhost/data"
+while [ "$readest_path" != / ]; do
+  sudo setfacl -m u:www-data:--x "$readest_path"
+  readest_path="$(dirname "$readest_path")"
+done
+sudo -u www-data test -x "$PWD/.selfhost/data/updates"
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+之后使用“部署/更新服务端”。不要对整个 `.selfhost` 执行递归 `chmod 755/777`。
+迁移项目路径后需要重新生成 Compose/Nginx 配置、更新站点链接并重新设置祖先目录权限。
+
+Certbot 使用自定义目录时，系统默认续期任务不会自动找到它。需把下面命令加入你的
+定时任务（使用项目绝对路径；也可在仓库根目录手动运行）：
+
+```bash
+sudo certbot renew \
+  --config-dir "$PWD/.selfhost/certbot/config" \
+  --work-dir "$PWD/.selfhost/certbot/work" \
+  --logs-dir "$PWD/.selfhost/certbot/logs" \
+  --deploy-hook 'nginx -t && systemctl reload nginx'
+```
+
+服务备份只覆盖数据和服务配置，`keys/` 与 `certbot/` 需另行保存。
+项目内备份与原数据在同一磁盘，仍应定期复制备份到另一台机器。
 
 域名必须使用 HTTPS 默认 443 端口且不带路径。Nginx 将 `/` 转发到网页服务，
 `/auth/v1/`、`/rest/v1/` 转发到 Kong，`/readest-files/` 转发到 MinIO，
@@ -123,7 +200,8 @@ node scripts/selfhost/cli.mjs --receive /absolute/path/to/release-directory
 网页镜像打包在 `client-image.tar`，无需在恢复时重新编译。
 
 新服务器拉取分支、安装依赖后，运行“恢复到空数据目录”。只接受可信备份；不清空已有
-数据目录。恢复会替换 `.selfhost` 中的服务配置，然后用“启动已恢复服务”启动备份版本。
+数据目录。默认恢复到 `.selfhost/data`，并重新确认备份目录（默认 `.selfhost/backups`），
+不沿用旧服务器项目路径。恢复会替换 `.selfhost` 中的服务配置，然后用“启动已恢复服务”启动备份版本。
 先验证登录、书籍上传/下载、阅读进度同步和更新，再切 DNS；避免新旧两台同时接收写入。
 
 域名若也更换，必须在旧域名仍可用时发布指向新地址的客户端，或手动重新安装。

@@ -10,6 +10,25 @@ export const ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url
 export const STATE = path.join(ROOT, '.selfhost');
 export const APP = path.join(ROOT, 'apps/readest-app');
 
+// 集中校验服务数据与备份位置，避免配置向导和恢复流程使用不同的目录规则。
+export function serverDirectories(dataDirectory, backupDirectory) {
+  const dataDir = path.resolve(dataDirectory);
+  const backupDir = path.resolve(backupDirectory);
+  const contains = (parent, child) => {
+    const relative = path.relative(parent, child);
+    return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+  };
+  // 仓库内仅开放专用 data/backups 子树，不能把私钥、源码副本或 Rust 缓存当成数据。
+  for (const [directory, allowed, label] of [[dataDir, 'data', '数据'], [backupDir, 'backups', '备份']]) {
+    if (contains(directory, ROOT) || (contains(ROOT, directory) && !contains(path.join(STATE, allowed), directory))) {
+      throw new Error(`${label}目录请放在 .selfhost/${allowed}/ 内或仓库外，不能包含源码仓库`);
+    }
+  }
+  // 双向拒绝嵌套，保证备份不会递归包含自己，也不会混入数据库的运行文件。
+  if (contains(dataDir, backupDir) || contains(backupDir, dataDir)) throw new Error('数据目录与备份目录必须分开，不能互相包含');
+  return { dataDir, backupDir };
+}
+
 // 仅接受不含路径/凭据的 HTTPS 域名，确保代理路由及生成配置不会被输入改变。
 export function httpsOrigin(value) {
   if (typeof value !== 'string' || /\s/.test(value)) throw new Error('请输入 HTTPS 域名');

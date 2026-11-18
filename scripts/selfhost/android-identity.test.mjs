@@ -3,13 +3,38 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyIdentity, buildTargets } from './build.mjs';
+import { applyIdentity, buildTargets, patchWindowsAndroidTurso } from './build.mjs';
 
 test('Windows offers both NSIS and Android APK while Linux and macOS keep their targets', () => {
   assert.deepEqual(buildTargets('win32', 'x64'), ['windows-x86_64', 'android-arm64']);
   assert.deepEqual(buildTargets('linux', 'x64'), ['android-arm64']);
   assert.deepEqual(buildTargets('darwin', 'arm64'), ['darwin-aarch64']);
   assert.deepEqual(buildTargets('darwin', 'x64'), []);
+});
+
+test('Windows Android builds patch the Turso linker check only in the staged workspace', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'readest-turso-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stage = path.join(root, 'build source');
+  const source = path.join(root, 'cargo registry');
+  const buildScript = 'fn main() { if cfg!(target_os = "windows") { println!("cargo:rustc-link-lib=advapi32"); } }\n';
+  await mkdir(stage);
+  await mkdir(source);
+  await writeFile(path.join(stage, 'Cargo.toml'), '[patch.crates-io]\ntauri = { path = "packages/tauri" }\n');
+  await writeFile(path.join(source, 'build.rs'), buildScript);
+  await patchWindowsAndroidTurso(stage, async (command, args, options) => {
+    assert.equal(command, 'cargo');
+    assert.ok(args.includes('aarch64-linux-android'));
+    assert.equal(options.cwd, stage);
+    return JSON.stringify({ packages: [{ name: 'turso_ext', version: '0.6.1',
+      source: 'registry+https://github.com/rust-lang/crates.io-index',
+      manifest_path: path.join(source, 'Cargo.toml') }] });
+  });
+  assert.equal(await readFile(path.join(source, 'build.rs'), 'utf8'), buildScript);
+  assert.equal(await readFile(path.join(stage, 'patches/turso_ext-0.6.1/build.rs'), 'utf8'),
+    buildScript.replace('cfg!(target_os = "windows")', 'std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")'));
+  assert.equal(await readFile(path.join(stage, 'Cargo.toml'), 'utf8'),
+    '[patch.crates-io]\nturso_ext = { path = "patches/turso_ext-0.6.1" }\ntauri = { path = "packages/tauri" }\n');
 });
 
 test('personal Android identity relocates the handwritten activity into the generated package', async () => {

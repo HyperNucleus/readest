@@ -191,6 +191,30 @@ export async function initializeAndroidProject(stageApp, config, tauri, sourceAp
   });
 }
 
+export async function patchWindowsAndroidTurso(stage, cargo = run) {
+  const metadata = JSON.parse(await cargo('cargo', ['metadata', '--format-version', '1',
+    '--locked', '--filter-platform', 'aarch64-linux-android'], { cwd: stage, capture: true }));
+  const extension = metadata.packages.find(({ name, version, source }) =>
+    name === 'turso_ext' && version === '0.6.1' && source === 'registry+https://github.com/rust-lang/crates.io-index');
+  if (!extension) return;
+
+  // Backport Turso 7fc2acb: build scripts run on the host, but the library must match the target.
+  const sourceDir = path.dirname(extension.manifest_path);
+  const buildScript = await readFile(path.join(sourceDir, 'build.rs'), 'utf8');
+  const hostCheck = 'cfg!(target_os = "windows")';
+  if (!buildScript.includes(hostCheck)) return;
+
+  const relative = 'patches/turso_ext-0.6.1';
+  const workspace = path.join(stage, 'Cargo.toml');
+  const manifest = await readFile(workspace, 'utf8');
+  if (!manifest.includes('[patch.crates-io]')) throw new Error('找不到 Cargo 工作区的 [patch.crates-io] 配置');
+  await cp(sourceDir, path.join(stage, relative), { recursive: true });
+  await writeFile(path.join(stage, relative, 'build.rs'), buildScript.replace(hostCheck,
+    'std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")'));
+  await writeFile(workspace, manifest.replace('[patch.crates-io]',
+    `[patch.crates-io]\nturso_ext = { path = "${relative}" }`));
+}
+
 export async function configureAndroidResources(stageApp) {
   const filename = path.join(stageApp, 'src-tauri/gen/android/gradle.properties');
   const settings = {
@@ -223,7 +247,7 @@ export async function buildClientUnrestricted(profile, local, version, passwords
   if (!buildTargets().includes(target)) throw new Error('当前系统不支持所选构建目标');
   const { javaHome, androidHome, ndkHome } = androidHomes(local);
   const privateKey = await readFile(local.signingKey, 'utf8');
-  const { stageApp } = await prepareBuildSource();
+  const { stage, stageApp } = await prepareBuildSource();
   const pkg = await loadJson(path.join(stageApp, 'package.json'));
   pkg.version = release.version;
   await saveJson(path.join(stageApp, 'package.json'), pkg);
@@ -236,6 +260,7 @@ export async function buildClientUnrestricted(profile, local, version, passwords
   const tauri = (args) => run('pnpm', ['exec', 'tauri', ...args], { cwd: stageApp, env });
   const override = tauriOverride(p, release.version);
   if (target === 'android-arm64') {
+    if (process.platform === 'win32') await patchWindowsAndroidTurso(stage);
     // Gradle requires both SDK environment variables to point to the same installation.
     env.ANDROID_SDK_ROOT = androidHome;
     // 上游为包体积使用单个 codegen unit；个人构建优先降低 LLVM 的峰值内存。

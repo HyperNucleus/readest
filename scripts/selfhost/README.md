@@ -320,6 +320,16 @@ Android 初始化与构建使用同一份 `tauri.personal.conf.json`。每次构
 
 如果旧版本在 `tauri android init` 后提示个人包路径不存在（例如 `java/top/hypernucleus/readest`），更新脚本后重新运行 `pnpm selfhost` →「编译客户端」→ Android ARM64（APK）。未成功发布的版本可以继续使用原版本号。
 
+### Windows 构建 Android APK 时找不到 advapi32
+
+如果链接器报告 `unable to find library -ladvapi32`，原因是 `turso_ext 0.6.1`
+的构建脚本按主机系统选择库。在 Windows 构建 Android 时，向导会在源码副本中回移
+[Turso 的目标系统检查](https://github.com/tursodatabase/turso/commit/7fc2acbbd786691c0ab47346d753b5ad7eec0362)。
+更新代码后直接重新构建即可。Cargo 全局缓存和原工作区里的源码保持原样。
+
+Windows Android 构建使用向导所设的“Rust 并行任务数”。32 GiB 内存的机器可先用 4–6，
+内存余量充足时再试 8。Gradle 使用 Android 生成工程的默认资源配置。
+
 ### Android 编译进程被 SIGKILL
 
 如果最后是 `rustc ... (signal: 9, SIGKILL: kill)`，而不是具体 Rust 编译错误，表示进程被外部强制终止。Linux 上常见原因是主机或容器内存不足；前面的 `dead_code` warnings 不会导致这个退出。

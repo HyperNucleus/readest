@@ -185,6 +185,9 @@ export async function initializeAndroidProject(stageApp, config, tauri, sourceAp
   const android = path.join(stageApp, 'src-tauri/gen/android');
   await rm(android, { recursive: true, force: true });
   await tauri(['android', 'init', '--config', config]);
+  // Match the release workflow: generate the launcher color and density assets,
+  // then restore the tracked adaptive icon and its custom monochrome images.
+  await tauri(['icon', '../../data/icons/readest-book.png']);
   await cp(path.join(sourceApp, 'src-tauri/gen/android/app'), path.join(android, 'app'), {
     recursive: true,
     filter: (source) => !['build', '.gradle', 'generated'].includes(path.basename(source)),

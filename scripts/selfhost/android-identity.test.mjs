@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { applyIdentity, buildTargets, patchWindowsAndroidTurso } from './build.mjs';
-import { ROOT } from './config.mjs';
+import { APP, ROOT } from './config.mjs';
+import { run } from './process.mjs';
 
 test('Windows offers both NSIS and Android APK while Linux and macOS keep their targets', () => {
   assert.deepEqual(buildTargets('win32', 'x64'), ['windows-x86_64', 'android-arm64']);
@@ -59,15 +60,22 @@ test('personal Android identity relocates the handwritten activity into the gene
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('Android init uses the build config and cleans only the staged generated project', async () => {
+test('Android init generates launcher resources and preserves the tracked adaptive icon', async () => {
   const { initializeAndroidProject } = await import('./build.mjs');
   const root = await mkdtemp(path.join(os.tmpdir(), 'readest-android-init-'));
   try {
-    const stage = path.join(root, 'stage');
+    const stage = path.join(root, 'stage/apps/readest-app');
     const original = path.join(root, 'original');
     const relative = 'src-tauri/gen/android/app';
+    const res = path.join(relative, 'src/main/res');
+    const launcher = path.join(res, 'mipmap-anydpi-v26/ic_launcher.xml');
+    const iconDir = path.join(root, 'stage/data/icons');
+    await mkdir(iconDir, { recursive: true });
+    await copyFile(path.join(ROOT, 'data/icons/readest-book.png'), path.join(iconDir, 'readest-book.png'));
     await mkdir(path.join(stage, relative), { recursive: true });
     await mkdir(path.join(original, relative, 'build'), { recursive: true });
+    await mkdir(path.dirname(path.join(original, launcher)), { recursive: true });
+    await copyFile(path.join(APP, launcher), path.join(original, launcher));
     await writeFile(path.join(stage, relative, 'stale'), 'stale generated project');
     await writeFile(path.join(original, relative, 'MainActivity.kt'), 'handwritten');
     await writeFile(path.join(original, relative, 'build/old.apk'), 'old build');
@@ -76,12 +84,20 @@ test('Android init uses the build config and cleans only the staged generated pr
     const commands = [];
     await initializeAndroidProject(stage, config, async (args) => {
       commands.push(args);
+      if (args[0] === 'icon') {
+        await run(process.execPath, [path.join(APP, 'node_modules/@tauri-apps/cli/tauri.js'), ...args,
+          '--output', path.join(stage, 'src-tauri/icons')], { cwd: stage, capture: true });
+        return;
+      }
       await assert.rejects(stat(path.join(stage, relative)), { code: 'ENOENT' });
       assert.equal(JSON.parse(await readFile(args[3], 'utf8')).identifier, 'top.hypernucleus.readest');
-      await mkdir(path.join(stage, relative), { recursive: true });
+      await mkdir(path.join(stage, res), { recursive: true });
       await writeFile(path.join(stage, relative, 'generated-template'), 'template');
     }, original);
-    assert.deepEqual(commands, [['android', 'init', '--config', config]]);
+    assert.deepEqual(commands, [['android', 'init', '--config', config], ['icon', '../../data/icons/readest-book.png']]);
+    assert.match(await readFile(path.join(stage, res, 'values/ic_launcher_background.xml'), 'utf8'), /<color name="ic_launcher_background">/);
+    assert.ok((await stat(path.join(stage, res, 'mipmap-mdpi/ic_launcher_foreground.png'))).size > 0);
+    assert.equal(await readFile(path.join(stage, launcher), 'utf8'), await readFile(path.join(APP, launcher), 'utf8'));
     assert.equal(await readFile(path.join(stage, relative, 'MainActivity.kt'), 'utf8'), 'handwritten');
     assert.equal(await readFile(path.join(original, relative, 'build/old.apk'), 'utf8'), 'old build');
     await assert.rejects(stat(path.join(stage, relative, 'build')), { code: 'ENOENT' });

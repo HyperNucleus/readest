@@ -13,8 +13,8 @@ test('Android resource settings replace conflicting defaults and preserve app pr
     await mkdir(directory, { recursive: true });
     const file = path.join(directory, 'gradle.properties');
     await writeFile(file, 'org.gradle.jvmargs=-Xmx2048m\norg.gradle.workers.max = 8\norg.gradle.daemon:true\nandroid.useAndroidX=true\n');
-    await configureAndroidResources(root);
-    await configureAndroidResources(root);
+    await configureAndroidResources(root, 'linux');
+    await configureAndroidResources(root, 'linux');
     const source = await readFile(file, 'utf8');
     assert.match(source, /^android.useAndroidX=true$/m);
     assert.match(source, /^org.gradle.workers.max=1$/m);
@@ -23,6 +23,21 @@ test('Android resource settings replace conflicting defaults and preserve app pr
     assert.equal(source.match(/org.gradle.jvmargs=/g).length, 1);
     assert.doesNotMatch(source, /2048m|workers.max = 8|daemon:true/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Windows Android disables Kotlin incremental compilation and retains Gradle resources', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'readest-gradle-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'src-tauri/gen/android');
+  await mkdir(directory, { recursive: true });
+  const file = path.join(directory, 'gradle.properties');
+  await writeFile(file, 'org.gradle.jvmargs=-Xmx2048m\r\norg.gradle.workers.max=8\r\nkotlin.incremental = true\r\n');
+  await configureAndroidResources(root, 'win32');
+  const source = await readFile(file, 'utf8');
+  assert.match(source, /^org.gradle.jvmargs=-Xmx2048m$/m);
+  assert.match(source, /^org.gradle.workers.max=8$/m);
+  assert.match(source, /^kotlin.incremental=false$/m);
+  assert.equal(source.match(/^kotlin\.incremental\s*=/gm).length, 1);
 });
 
 test('resource samples retain cgroup OOM evidence without recording command lines or environment', async () => {

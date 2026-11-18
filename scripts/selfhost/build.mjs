@@ -218,9 +218,11 @@ export async function patchWindowsAndroidTurso(stage, cargo = run) {
   }));
 }
 
-export async function configureAndroidResources(stageApp) {
+export async function configureAndroidResources(stageApp, platform = process.platform) {
   const filename = path.join(stageApp, 'src-tauri/gen/android/gradle.properties');
-  const settings = {
+  // Kotlin's incremental cache cannot relativize plugin sources from Cargo's
+  // registry when it is on a different Windows drive than the generated app.
+  const settings = platform === 'win32' ? { 'kotlin.incremental': 'false' } : {
     'org.gradle.jvmargs': '-Xmx768m -XX:MaxMetaspaceSize=384m -Dfile.encoding=UTF-8',
     'org.gradle.workers.max': '1',
     'org.gradle.parallel': 'false',
@@ -281,8 +283,10 @@ export async function buildClientUnrestricted(profile, local, version, passwords
   }
   const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
   await saveJson(config, override);
-  if (target === 'android-arm64') await initializeAndroidProject(stageApp, config, tauri);
-  if (target === 'android-arm64' && process.platform === 'linux') await configureAndroidResources(stageApp);
+  if (target === 'android-arm64') {
+    await initializeAndroidProject(stageApp, config, tauri);
+    await configureAndroidResources(stageApp);
+  }
   await applyIdentity(stageApp, p);
   // build.rs 原本无条件编译 Windows 缩略图 DLL；个人版不安装它，也无需执行这个嵌套构建。
   const rustBuild = path.join(stageApp, 'src-tauri/build.rs');

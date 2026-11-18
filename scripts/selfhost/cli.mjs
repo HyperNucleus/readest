@@ -6,11 +6,16 @@ import os from 'node:os';
 import { ROOT, APP, STATE, httpsOrigin, clientProfile, loadJson, saveJson, serverDirectories, applicationName, applicationId, applicationScheme } from './config.mjs';
 import { run, locked, prepareSources } from './process.mjs';
 import { newSecrets, generateServer, deploy, account, backup, restore, SERVER_FILE, COMPOSE_FILE, composeRun } from './server.mjs';
-import { buildClient, releaseVersion } from './build.mjs';
-import { receiveRelease, uploadRelease } from './release.mjs';
+import { ANDROID_NDK_VERSION, androidHomes, buildClient, buildTargets, checkAndroidBuild, hostExecutable, releaseVersion } from './build.mjs';
+import { inspectRelease, receiveRelease, uploadRelease } from './release.mjs';
 
 const CLIENT_FILE = path.join(STATE, 'client.json');
 const LOCAL_FILE = path.join(STATE, 'local.json');
+const targetNames = {
+  'darwin-aarch64': 'macOS Apple Silicon（DMG）',
+  'windows-x86_64': 'Windows x64（NSIS）',
+  'android-arm64': 'Android ARM64（APK）',
+};
 
 // SSH 接收端不加载交互库、不读取口令，验证当前服务器配置后只执行产物发布。
 if (process.argv[2] === '--receive') {
@@ -20,7 +25,7 @@ if (process.argv[2] === '--receive') {
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 } else if (process.argv[2] === '--help') {
   // 无依赖帮助可用于首次拉取后的入口检查。
-  console.log('pnpm selfhost：配置、检查、部署、编译、SSH 发布、账号管理、备份与恢复。私密配置保存在 .selfhost/，不提交 Git。');
+  console.log('pnpm selfhost：配置、检查、部署、编译、ADB 安装、SSH 发布、账号管理、备份与恢复。私密配置保存在 .selfhost/，不提交 Git。');
 } else {
   await interactive().catch((error) => {
     // Ctrl+C 是正常取消；不打印可能包含口令/配置内容的调用栈。
@@ -43,6 +48,38 @@ async function interactive() {
   const linuxPath = (v) => { if (!/^\/[a-zA-Z0-9_./-]+$/.test(v) || v.split('/').includes('..') || v === '/') throw new Error('请输入不含空格或 .. 的绝对目录/文件路径'); return v; };
   const local = () => loadJson(LOCAL_FILE, {});
   const profile = async () => clientProfile(await loadJson(CLIENT_FILE));
+  const targets = buildTargets();
+  const supportsAndroid = targets.includes('android-arm64');
+  const chooseTarget = async (message) => {
+    if (!targets.length) throw new Error('当前系统没有可用的构建目标');
+    if (targets.length === 1) return targets[0];
+    return select({ message, choices: targets.map((value) => ({ name: targetNames[value], value })) });
+  };
+  const sdkExecutable = async (name, directory) => {
+    const executable = hostExecutable(name);
+    const candidate = directory && path.join(directory, executable);
+    return candidate && await exists(candidate) ? candidate : executable;
+  };
+  const adbCommand = (config) => {
+    const { androidHome } = androidHomes(config);
+    return sdkExecutable('adb', androidHome && path.join(androidHome, 'platform-tools'));
+  };
+
+  async function chooseReleaseDirectory(config, target) {
+    const recent = [...new Set([config.lastRelease, ...Object.values(config.lastReleases ?? {})].filter(Boolean))];
+    const choices = [];
+    for (const directory of recent) {
+      const release = await loadJson(path.join(directory, 'release.json'), null);
+      if (release && (!target || release.platform === target)) {
+        choices.push({ value: directory, name: `${targetNames[release.platform] ?? release.platform} · ${release.version} · ${directory}` });
+      }
+    }
+    if (choices.length) {
+      const directory = await select({ message: '选择本机发布产物', choices: [...choices, { name: '输入其他发布目录', value: '' }] });
+      if (directory) return path.resolve(directory);
+    }
+    return path.resolve(await ask('本机发布目录', config.lastReleases?.[target] || (!target ? config.lastRelease : '') || ''));
+  }
   // 仓库内的私钥必须放在已排除 Git/Docker 的 .selfhost 中，防止自选路径意外入库。
   const privatePath = (value) => {
     const absolute = path.resolve(value);
@@ -142,21 +179,24 @@ async function interactive() {
   }
 
   async function configureBuild() {
+    const target = await chooseTarget('配置哪个构建目标？');
     const old = await local();
     const value = {
       ...old, signingKey: privatePath(await ask('Tauri 更新签名私钥路径（与客户端公钥配对）', old.signingKey || path.join(STATE, 'keys/update.key'), privatePath)),
       jobs: await integer('Rust 并行任务数（服务器建议 2）', old.jobs || 2, 1, 64),
     };
-    if (process.platform === 'linux') {
-      value.javaHome = await ask('JDK 17 JAVA_HOME', old.javaHome || process.env.JAVA_HOME || '');
-      value.androidHome = await ask('Android SDK 目录（需要 platform 36）', old.androidHome || process.env.ANDROID_HOME || '');
-      value.ndkHome = await ask('Android NDK 目录（上游使用 28.2.13676358）', old.ndkHome || process.env.NDK_HOME || '');
+    if (target === 'android-arm64') {
+      const defaults = androidHomes(old);
+      value.javaHome = path.resolve(await ask('JDK 17 JAVA_HOME', defaults.javaHome));
+      value.androidHome = path.resolve(await ask('Android SDK 目录（需要 platform 36）', defaults.androidHome));
+      const ndk = old.ndkHome || process.env.NDK_HOME || path.join(value.androidHome, 'ndk', ANDROID_NDK_VERSION);
+      value.ndkHome = path.resolve(await ask(`Android NDK 目录（上游使用 ${ANDROID_NDK_VERSION}）`, ndk));
       value.androidKey = privatePath(await ask('Android 长期签名 keystore 路径', old.androidKey || path.join(STATE, 'keys/android.jks'), privatePath));
       value.androidAlias = await ask('Android key alias', old.androidAlias || 'personal-reader', (v) => { if (!/^[a-zA-Z0-9_.-]+$/.test(v)) throw new Error('alias 仅支持字母、数字、点、下划线、短横线'); });
-      if (!await exists(value.androidKey) && await confirm({ message: '此 keystore 不存在，现在生成？私钥需另行备份以便后续覆盖升级。', default: false })) {
+      if (!await exists(value.androidKey) && await confirm({ message: '此 keystore 不存在。仅在首次发布时生成新密钥；已有安装请使用原密钥。现在生成？', default: false })) {
         const secret = await password({ message: '新 keystore 密码（至少 8 位）', validate: (v) => v.length >= 8 || '至少 8 位' });
         await mkdir(path.dirname(value.androidKey), { recursive: true, mode: 0o700 });
-        await run(path.join(value.javaHome, 'bin/keytool'), ['-genkeypair', '-keystore', value.androidKey, '-alias', value.androidAlias,
+        await run(path.join(value.javaHome, 'bin', hostExecutable('keytool')), ['-genkeypair', '-keystore', value.androidKey, '-alias', value.androidAlias,
           '-keyalg', 'RSA', '-keysize', '3072', '-validity', '10000', '-dname', 'CN=Personal Reader',
           '-storepass:env', 'READEST_KEY_PASSWORD', '-keypass:env', 'READEST_KEY_PASSWORD'], { env: { READEST_KEY_PASSWORD: secret } });
         await chmod(value.androidKey, 0o600);
@@ -170,7 +210,15 @@ async function interactive() {
     const fs = await statfs(ROOT);
     console.log(`仓库所在磁盘剩余 ${(fs.bavail * fs.bsize / 2 ** 30).toFixed(1)} GiB；首次原生构建工具链/缓存可能需要数十 GiB。`);
     const commands = [['pnpm', ['--version']], ['git', ['--version']], ['cargo', ['--version']], ['rustc', ['--version']], ['ssh', ['-V']]];
-    if (process.platform === 'linux') commands.push(['docker', ['compose', 'version']], ['java', ['-version']]);
+    if (process.platform === 'linux') commands.push(['docker', ['compose', 'version']]);
+    if (supportsAndroid) {
+      const config = await local();
+      const { javaHome } = androidHomes(config);
+      commands.push([await sdkExecutable('java', javaHome && path.join(javaHome, 'bin')), ['-version']],
+        [await adbCommand(config), ['version']]);
+      try { await checkAndroidBuild(config); console.log('✓ Android SDK、NDK、JDK 和签名文件已找到'); }
+      catch (error) { console.log(`✗ Android ARM64：${error.message}`); }
+    }
     if (process.platform === 'darwin') commands.push(['xcodebuild', ['-version']]);
     for (const [cmd, args] of commands) {
       try { const result = await run(cmd, args, { capture: true }); console.log(`✓ ${cmd} ${result.split('\n')[0]}`); }
@@ -190,7 +238,9 @@ async function interactive() {
     const action = await select({ message: 'Readest 自部署与个人编译', choices: [
       ['配置服务端', 'server'], ['配置/导入客户端连接', 'client'], ['导出客户端公开配置', 'export'],
       ['配置本机编译与签名', 'build-config'], ['环境与连接检查', 'check'], ['部署/更新服务端', 'deploy'],
-      ['启动已恢复服务（不重建/升级）', 'start'], ['编译当前平台客户端', 'build'], ['通过 SSH 上传并发布更新', 'publish'],
+      ['启动已恢复服务（不重建/升级）', 'start'], ['编译客户端', 'build'],
+      ...(supportsAndroid ? [['推送并安装 APK 到 Android 设备（ADB）', 'adb']] : []),
+      ['通过 SSH 上传并发布更新', 'publish'],
       ['创建账号/重置密码', 'account'], ['备份服务端', 'backup'], ['恢复到空数据目录', 'restore'], ['退出', 'exit'],
     ].map(([name, value]) => ({ name, value })) });
     if (action === 'exit') break;
@@ -206,22 +256,42 @@ async function interactive() {
           await saveJson(filename, await profile()); console.log(`已导出公开配置：${filename}`); return;
         }
         if (action === 'build') {
+          const target = await chooseTarget('选择客户端构建目标');
           const p = await profile(); const l = await local();
           if (!l.signingKey || !l.jobs) throw new Error('请先配置本机编译与签名');
+          if (target === 'android-arm64') await checkAndroidBuild(l);
           const pkg = await loadJson(path.join(APP, 'package.json'));
-          const version = await ask('本次三平台统一版本（后续更新必须递增）', l.version || pkg.version, releaseVersion);
-          if (!await summary('准备依赖并开始构建？', { system: `${process.platform}/${process.arch}`, app: p.appName, appId: p.appId, server: p.serverUrl, version, jobs: l.jobs })) return;
+          const version = releaseVersion(await ask('本次三平台统一版本（后续更新必须递增）', l.version || pkg.version, releaseVersion)).version;
+          if (!await summary('准备依赖并开始构建？', { system: `${process.platform}/${process.arch}`, target: targetNames[target], app: p.appName, appId: p.appId, server: p.serverUrl, version, jobs: process.platform === 'linux' ? 1 : l.jobs })) return;
           const passwords = { update: await password({ message: '更新签名私钥密码（未加密则留空）' }) };
-          if (process.platform === 'linux') passwords.android = await password({ message: 'Android keystore 密码' });
+          if (target === 'android-arm64') passwords.android = await password({ message: 'Android keystore 密码' });
           await prepareSources(true);
           await run('pnpm', ['install', '--frozen-lockfile']);
           await run('pnpm', ['--filter', '@readest/readest-app', 'setup-vendors']);
-          const output = await buildClient(p, l, version, passwords);
-          await saveJson(LOCAL_FILE, { ...l, version, lastRelease: output }); return;
+          const output = await buildClient(p, l, version, passwords, target);
+          await saveJson(LOCAL_FILE, { ...l, version, lastRelease: output, lastReleases: { ...l.lastReleases, [target]: output } }); return;
+        }
+        if (action === 'adb') {
+          const l = await local();
+          const directory = await chooseReleaseDirectory(l, 'android-arm64');
+          const release = await inspectRelease(directory, await profile());
+          if (release.platform !== 'android-arm64') throw new Error('请选择 Android ARM64 的发布目录');
+          const adb = await adbCommand(l);
+          const listing = await run(adb, ['devices', '-l'], { capture: true });
+          const choices = listing.split(/\r?\n/).flatMap((line) => {
+            const device = line.match(/^(\S+)\s+device(?:\s+.*)?$/);
+            return device ? [{ name: line.trim(), value: device[1] }] : [];
+          });
+          if (!choices.length) throw new Error('未找到已授权的 Android 设备。请连接设备、开启 USB 调试并确认授权。');
+          const device = choices.length === 1 ? choices[0].value : await select({ message: '选择要安装的设备', choices });
+          const apk = path.join(directory, release.artifact);
+          if (!await summary('在所选 Android 设备上安装或覆盖升级？', { device, apk, version: release.version })) return;
+          await run(adb, ['-s', device, 'install', '-r', apk]);
+          return;
         }
         if (action === 'publish') {
           const p = await profile(); const l = await local(); const old = l.ssh || {};
-          const directory = path.resolve(await ask('本机发布目录', l.lastRelease || ''));
+          const directory = await chooseReleaseDirectory(l);
           // Android 在服务器本机编译时无需绕回 SSH；仍经过完全相同的签名/完整性检查。
           if (await exists(SERVER_FILE) && await confirm({ message: '产物已在这台部署服务器上，直接汇总并在三平台齐全后发布？', default: true })) {
             await receiveRelease(directory, p, await loadJson(SERVER_FILE)); return;

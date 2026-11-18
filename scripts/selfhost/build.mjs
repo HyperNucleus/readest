@@ -6,6 +6,45 @@ import { ROOT, APP, STATE, clientProfile, loadJson, saveJson } from './config.mj
 import { run } from './process.mjs';
 import { protectedBuild } from './build-resources.mjs';
 
+export function buildTargets(platform = process.platform, arch = process.arch) {
+  switch (platform) {
+    case 'linux': return ['android-arm64'];
+    case 'win32': return ['windows-x86_64', 'android-arm64'];
+    case 'darwin': return arch === 'arm64' ? ['darwin-aarch64'] : [];
+    default: return [];
+  }
+}
+
+export function hostExecutable(name) {
+  return process.platform === 'win32' ? `${name}.exe` : name;
+}
+
+export const ANDROID_NDK_VERSION = '28.2.13676358';
+
+export function androidHomes(local) {
+  const javaHome = local.javaHome || process.env.JAVA_HOME;
+  const androidHome = local.androidHome || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT ||
+    (process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Android/Sdk') : undefined);
+  const ndkHome = local.ndkHome || process.env.NDK_HOME || (androidHome ? path.join(androidHome, 'ndk', ANDROID_NDK_VERSION) : undefined);
+  return { javaHome, androidHome, ndkHome };
+}
+
+export async function checkAndroidBuild(local) {
+  const { javaHome, androidHome, ndkHome } = androidHomes(local);
+  const files = [
+    [javaHome && path.join(javaHome, 'bin', hostExecutable('java')), 'JDK 17（JAVA_HOME）'],
+    [androidHome && path.join(androidHome, 'platforms/android-36/android.jar'), 'Android SDK platform 36'],
+    [ndkHome && path.join(ndkHome, 'source.properties'), 'Android NDK'],
+    [local.androidKey, 'Android 长期签名 keystore'],
+  ];
+  for (const [file, label] of files) {
+    if (!file || !(await stat(file).catch(() => null))?.isFile()) {
+      throw new Error(`找不到 ${label}${file ? `（${file}）` : ''}，请检查「配置本机编译与签名」`);
+    }
+  }
+  if (!/^[a-zA-Z0-9_.-]+$/.test(local.androidAlias ?? '')) throw new Error('请配置有效的 Android 签名 alias');
+}
+
 // 版本统一用于三平台清单；限制为稳定版，Android versionCode 可确定性计算且递增。
 export function releaseVersion(value) {
   if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error('版本必须是 major.minor.patch，例如 0.12.21');
@@ -171,17 +210,18 @@ export async function configureAndroidResources(stageApp) {
 }
 
 // 编译副本复用已安装依赖，Rust 缓存放在 .selfhost 内；不复制本地环境文件或私钥。
-export async function buildClient(profile, local, version, passwords) {
+export async function buildClient(profile, local, version, passwords, target = buildTargets()[0]) {
   const normalized = releaseVersion(version).version;
+  if (!buildTargets().includes(target)) throw new Error('当前系统不支持所选构建目标');
   if (process.platform === 'linux') return protectedBuild({ profile, local, version: normalized, passwords });
-  return buildClientUnrestricted(profile, local, normalized, passwords);
+  return buildClientUnrestricted(profile, local, normalized, passwords, target);
 }
 
-export async function buildClientUnrestricted(profile, local, version, passwords) {
+export async function buildClientUnrestricted(profile, local, version, passwords, target = buildTargets()[0]) {
   const p = clientProfile(profile);
   const release = releaseVersion(version);
-  const target = process.platform === 'darwin' ? 'darwin-aarch64' : process.platform === 'win32' ? 'windows-x86_64' : 'android-arm64';
-  if (process.platform === 'darwin' && process.arch !== 'arm64') throw new Error('当前只配置了 Apple Silicon 构建');
+  if (!buildTargets().includes(target)) throw new Error('当前系统不支持所选构建目标');
+  const { javaHome, androidHome, ndkHome } = androidHomes(local);
   const privateKey = await readFile(local.signingKey, 'utf8');
   const { stageApp } = await prepareBuildSource();
   const pkg = await loadJson(path.join(stageApp, 'package.json'));
@@ -189,28 +229,32 @@ export async function buildClientUnrestricted(profile, local, version, passwords
   await saveJson(path.join(stageApp, 'package.json'), pkg);
   const env = { ...clientEnvironment(p), TAURI_SIGNING_PRIVATE_KEY: privateKey,
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: passwords.update, CARGO_TARGET_DIR: path.join(STATE, 'target'),
-    CARGO_BUILD_JOBS: String(local.jobs), JAVA_HOME: local.javaHome || process.env.JAVA_HOME,
-    ANDROID_HOME: local.androidHome || process.env.ANDROID_HOME, NDK_HOME: local.ndkHome || process.env.NDK_HOME,
+    CARGO_BUILD_JOBS: String(local.jobs), JAVA_HOME: javaHome,
+    ANDROID_HOME: androidHome, NDK_HOME: ndkHome,
     READEST_KEY_PASSWORD: passwords.android ?? '',
   };
   const tauri = (args) => run('pnpm', ['exec', 'tauri', ...args], { cwd: stageApp, env });
   const override = tauriOverride(p, release.version);
   if (target === 'android-arm64') {
+    // Gradle requires both SDK environment variables to point to the same installation.
+    env.ANDROID_SDK_ROOT = androidHome;
     // 上游为包体积使用单个 codegen unit；个人构建优先降低 LLVM 的峰值内存。
     // 仅覆盖本次 Android 构建，不改工作区的 release profile 或桌面端参数。
     env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16';
     env.CARGO_PROFILE_RELEASE_OPT_LEVEL = '2';
     env.CARGO_PROFILE_RELEASE_LTO = 'off';
-    env.CARGO_BUILD_JOBS = '1';
-    // Report why Cargo invalidates cached artifacts during Gradle's second invocation.
-    env.CARGO_LOG = 'cargo::core::compiler::fingerprint=info';
+    if (process.platform === 'linux') {
+      env.CARGO_BUILD_JOBS = '1';
+      // Report why Cargo invalidates cached artifacts during Gradle's second invocation.
+      env.CARGO_LOG = 'cargo::core::compiler::fingerprint=info';
+    }
     override.bundle.createUpdaterArtifacts = false;
     override.bundle.android = { versionCode: release.code };
   }
   const config = path.join(stageApp, 'src-tauri/tauri.personal.conf.json');
   await saveJson(config, override);
   if (target === 'android-arm64') await initializeAndroidProject(stageApp, config, tauri);
-  if (target === 'android-arm64') await configureAndroidResources(stageApp);
+  if (target === 'android-arm64' && process.platform === 'linux') await configureAndroidResources(stageApp);
   await applyIdentity(stageApp, p);
   // build.rs 原本无条件编译 Windows 缩略图 DLL；个人版不安装它，也无需执行这个嵌套构建。
   const rustBuild = path.join(stageApp, 'src-tauri/build.rs');
@@ -223,10 +267,12 @@ export async function buildClientUnrestricted(profile, local, version, passwords
     // 签名密码由环境读取，不写入 keystore.properties；原签名块改读该环境变量。
     const gradle = path.join(stageApp, 'src-tauri/gen/android/app/build.gradle.kts');
     let source = await readFile(gradle, 'utf8');
-    source = source.replaceAll('keystoreProperties["password"] as String', 'System.getenv("READEST_KEY_PASSWORD")');
+    source = source.replaceAll('keystoreProperties["password"] as String', 'System.getenv("READEST_KEY_PASSWORD")')
+      .replace('keystoreProperties["storeFile"] as String', 'System.getenv("READEST_ANDROID_KEYSTORE")');
+    env.READEST_ANDROID_KEYSTORE = path.resolve(local.androidKey);
     await writeFile(gradle, `// Selfhost build: signing passwords come only from the process environment.\n${source}`);
     await writeFile(path.join(stageApp, 'src-tauri/gen/android/keystore.properties'),
-      `# Selfhost build: local key path only; password is not persisted.\nkeyAlias=${local.androidAlias}\nstoreFile=${local.androidKey.replaceAll('\\', '/') }\n`, { mode: 0o600 });
+      `# Selfhost build: key path and password are supplied via the environment.\nkeyAlias=${local.androidAlias}\n`, { mode: 0o600 });
   }
   // macOS 更新包需要显式启用 app；仅打包 dmg 不会生成 .app.tar.gz 和签名。
   const args = target === 'darwin-aarch64' ? ['build', '--target', 'aarch64-apple-darwin', '--bundles', 'app,dmg'] :

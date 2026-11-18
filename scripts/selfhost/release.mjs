@@ -2,7 +2,7 @@
 import { createHash, createPublicKey, verify, randomUUID } from 'node:crypto';
 import { cp, mkdir, readFile, realpath, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { STATE, clientProfile, loadJson, saveJson } from './config.mjs';
+import { ROOT, STATE, clientProfile, loadJson, saveJson } from './config.mjs';
 import { releaseVersion } from './build.mjs';
 import { run, shellQuote } from './process.mjs';
 
@@ -108,9 +108,13 @@ export async function uploadRelease(directory, profile, ssh) {
     !/^\/[a-zA-Z0-9_./-]+$/.test(ssh.repository) || ssh.repository.split('/').includes('..')) throw new Error('SSH 主机/用户/仓库路径格式无效');
   const destination = `${ssh.user}@${ssh.host}`;
   const incoming = `${ssh.repository}/.selfhost/incoming/${randomUUID()}`;
-  const common = ['-o', 'StrictHostKeyChecking=ask', ...(ssh.key ? ['-i', ssh.key] : [])];
+  const identity = ssh.key?.startsWith('~') ? ssh.key : ssh.key && path.resolve(ROOT, ssh.key);
+  const common = ['-o', 'StrictHostKeyChecking=ask', ...(identity ? ['-i', identity] : [])];
   await run('ssh', [...common, '-p', String(ssh.port), destination, `mkdir -p -m 700 ${shellQuote(incoming)}`]);
-  await run('scp', [...common, '-P', String(ssh.port), ...[...r.artifacts.map((a) => a.name), 'release.json'].map((f) => path.join(directory, f)), `${destination}:${incoming}/`]);
+  // OpenSSH can parse the colon in a Windows drive path as a remote host separator.
+  // Transfer the verified local filenames from their own directory.
+  await run('scp', [...common, '-P', String(ssh.port), ...r.artifacts.map((a) => a.name), 'release.json',
+    `${destination}:${incoming}/`], { cwd: directory });
   // 远端只执行已随 Git 部署的发布模块，上传的 JSON 不会作为代码运行。
   await run('ssh', [...common, '-p', String(ssh.port), destination,
     `cd ${shellQuote(ssh.repository)} && node scripts/selfhost/cli.mjs --receive ${shellQuote(incoming)}`]);

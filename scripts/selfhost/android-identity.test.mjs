@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyIdentity } from './build.mjs';
+import { applyIdentity, buildTargets } from './build.mjs';
+
+test('Windows offers both NSIS and Android APK while Linux and macOS keep their targets', () => {
+  assert.deepEqual(buildTargets('win32', 'x64'), ['windows-x86_64', 'android-arm64']);
+  assert.deepEqual(buildTargets('linux', 'x64'), ['android-arm64']);
+  assert.deepEqual(buildTargets('darwin', 'arm64'), ['darwin-aarch64']);
+  assert.deepEqual(buildTargets('darwin', 'x64'), []);
+});
 
 test('personal Android identity relocates the handwritten activity into the generated package', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'readest-android-'));

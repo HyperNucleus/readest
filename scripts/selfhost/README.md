@@ -2,7 +2,7 @@
 
 从仓库根目录运行 `pnpm selfhost`。中文向导逐项询问配置，保存或执行前展示汇总。
 本模块面向已确认的组合：Ubuntu x86_64 + Docker Compose + 宿主机 Nginx；
-macOS Apple Silicon DMG、Windows x64 NSIS、Ubuntu 上构建 Android ARM64 APK。
+macOS Apple Silicon DMG、Windows x64 NSIS，以及在 Windows 或 Ubuntu 上构建 Android ARM64 APK。
 
 ## 首次准备
 
@@ -46,7 +46,7 @@ pnpm selfhost
    Docker 自身存储仍使用系统位置。数据和备份必须分开，不能互相包含。
 2. 运行“配置服务端”，填写 HTTPS 域名、独立名称/应用 ID/协议、目录、三个本机端口、
    TLS 证书路径、存储与翻译配额、可选字体地址和 OPDS 内网主机白名单。
-3. 首次可在服务器生成 Tauri 更新签名密钥（服务器也是 Android 构建机），或读取已有
+3. 首次可在服务器生成 Tauri 更新签名密钥，或读取已有
    `.pub` 文件。密钥生成后单独备份；后续配置默认沿用，不自动轮换。
 4. 按下文在项目内申请证书，将 `.selfhost/nginx.conf` 链接到 Nginx 配置目录，
    设置公开更新目录的访问权限，先执行 `nginx -t` 再重载。
@@ -185,8 +185,9 @@ S3 bucket `readest-files`、region `us-east-1`、MinIO 管理用户 `readest-adm
 
 ## 编译各客户端
 
-在三台机器分别导入同一份公开配置，选择“配置本机编译与签名”。
-Tauri 更新签名私钥必须与公开配置中的公钥配对：三台构建机使用同一把更新签名私钥，
+在各构建机导入同一份公开配置，选择“配置本机编译与签名”。Windows 可以分别选择
+桌面端和 Android 目标，两个目标共用 Tauri 更新签名配置。
+Tauri 更新签名私钥必须与公开配置中的公钥配对。所有构建机使用同一把更新签名私钥，
 通过安全方式单独分发，**不放进 Git，也不放进公开配置导出文件**。
 构建时交互输入加密口令，脚本不保存口令。私钥路径限于 `.selfhost/` 内或仓库外。
 
@@ -194,13 +195,17 @@ Tauri 更新签名私钥必须与公开配置中的公钥配对：三台构建�
 | --- | --- | --- |
 | macOS Apple Silicon | Xcode Command Line Tools、Rust，`aarch64-apple-darwin` target | DMG + `.app.tar.gz` 更新包；本地临时签名，不做 Apple 公证 |
 | Windows x64 | Visual Studio C++ Build Tools、Rust MSVC toolchain、WebView2 | NSIS `.exe`，暂不接入 Windows 代码签名证书 |
-| Ubuntu Android | JDK 17、Android SDK platform 36、NDK 28.2.13676358、Rust Android target，Tauri Android 所需系统依赖 | ARM64 APK，自己的长期 keystore + 更新包签名 |
+| Android ARM64（Windows 或 Ubuntu 构建） | JDK 17、Android SDK Platform 36、SDK Build-Tools、NDK 28.2.13676358、Rust target `aarch64-linux-android`；ADB 安装需 SDK Platform-Tools | ARM64 APK，自己的长期 keystore + 更新包签名 |
 
 Android keystore 可以在向导中首次生成。密码和 alias 必须长期保留；丢失 keystore
-就无法给现有 APK 做覆盖升级。服务器空间应同时容纳 SDK/NDK、Rust/Gradle 缓存、
-Docker 镜像、书库与备份；“环境检查”显示可用空间，不会自动清理任何数据。
+就无法给现有 APK 做覆盖升级。从 Ubuntu 迁移到 Windows 构建时，安全复制原有 keystore，
+继续使用同一个 alias、密码和 Tauri 更新签名私钥。Windows 上可用 Android Studio 的
+SDK Manager 安装 SDK、Build-Tools、Platform-Tools 及指定版本的 NDK，然后运行
+`rustup target add aarch64-linux-android`。请启用 Windows 的“开发人员模式”，
+以便 Tauri 创建 Android 原生库用的符号链接。“环境与连接检查”会显示 Android 工具路径检查和可用磁盘空间。
 
-选择“编译当前平台客户端”，输入三平台统一的 `major.minor.patch` 稳定版版本号。
+选择“编译客户端”。在 Windows 上选择 “Android ARM64（APK）” 或 “Windows x64（NSIS）”，
+再输入三平台统一的 `major.minor.patch` 稳定版版本号。
 后续发布必须递增；minor、patch 限制在 0–999，Android versionCode 使用
 `major * 1000000 + minor * 1000 + patch`。三平台需使用相同源码与公开配置。
 
@@ -214,15 +219,18 @@ macOS/Windows 自用安装包可能触发系统的未公证/未知发布者提�
 登录后在集成设置中开启同步；上游界面仍有“Readest Cloud”字样，在个人构建中实际连接
 的是你导入的服务器域名。
 
-## 上传与应用内更新
+## 设备安装、上传与应用内更新
 
 构建产物在 `.selfhost/releases/<版本>/<平台>/`。不要编辑里面的 `release.json`。
+要先在设备上验证 APK，连接 ARM64 设备、启用 USB 调试并授权，然后选择
+“推送并安装 APK 到 Android 设备（ADB）”。向导校验已签名的产物后执行 `adb install -r`，
+使用同一 keystore 签名时可覆盖升级。
 
-1. 在 Mac/Windows 选择“通过 SSH 上传并发布更新”，确认 SSH 主机、用户、端口、
-   私钥路径（或使用 ssh-agent）、服务器仓库绝对路径。
+1. 选择“通过 SSH 上传并发布更新”。Windows 构建了 NSIS 和 APK 时，两份产物可在菜单中
+   分别选择并上传。确认 SSH 主机、用户、端口、私钥路径（或使用 ssh-agent）和服务器仓库绝对路径。
 2. 服务器必须已拉取本分支并完成服务器配置；SSH 用户需有仓库和更新目录写权限。
    保留 OpenSSH 的主机指纹检查，不绕过 `known_hosts` 校验。
-3. Android 在服务器编译后，可在同一菜单选择直接汇总本机产物，无需 SSH 连回自己。
+3. Android 若在服务器编译，可在同一菜单选择直接汇总本机产物。
 4. 服务器验证应用 ID、域名、公钥、文件哈希和更新包签名。相同版本的 macOS、Windows、
    Android 三个平台都到齐后，才发布该版本，并最后原子替换 `latest.json`。
 
@@ -310,13 +318,13 @@ export const accessPolicy = {
 
 Android 初始化与构建使用同一份 `tauri.personal.conf.json`。每次构建只清理 `.selfhost/build-source` 中的 Android 生成工程，按个人 `appId` 重新初始化，再恢复仓库手写的 Activity、资源和 Gradle 配置，并迁移 Java/Kotlin 包目录。不会删除原工作区的 `src-tauri/gen/android` 或签名密钥。
 
-如果旧版本在 `tauri android init` 后提示个人包路径不存在（例如 `java/top/hypernucleus/readest`），更新脚本后重新运行 `pnpm selfhost` →「编译当前平台客户端」即可，无需手动改包名或删除原项目。未成功发布的版本可以继续使用原版本号。
+如果旧版本在 `tauri android init` 后提示个人包路径不存在（例如 `java/top/hypernucleus/readest`），更新脚本后重新运行 `pnpm selfhost` →「编译客户端」→ Android ARM64（APK）。未成功发布的版本可以继续使用原版本号。
 
 ### Android 编译进程被 SIGKILL
 
 如果最后是 `rustc ... (signal: 9, SIGKILL: kill)`，而不是具体 Rust 编译错误，表示进程被外部强制终止。Linux 上常见原因是主机或容器内存不足；前面的 `dead_code` warnings 不会导致这个退出。
 
-个人 Android 构建使用 `codegen-units=16`、`opt-level=2`、`lto=off`，降低优化阶段的内存压力，代价是 APK 可能变大、运行性能可能与上游 release 配置不同。macOS/Windows 保持原有优化参数。首次切换参数会重新编译受影响的 Rust 缓存。
+个人 Android 构建使用 `codegen-units=16`、`opt-level=2`、`lto=off`，降低优化阶段的内存压力，代价是 APK 可能变大、运行性能可能与上游 release 配置不同。macOS 和 Windows 桌面端使用原有优化参数。首次切换参数会重新编译受影响的 Rust 缓存。
 
 在失败的 Linux 主机上运行 `sudo journalctl -k -b | grep -Ei 'out of memory|oom|killed process'` 确认是否发生 OOM，并用 `free -h` 检查内存和 swap。在「配置本机编译与签名」中将 Rust 并行任务数设为 `1` 后重试。若仍被 OOM 杀死，需要增加可用内存或 swap；容器还需检查其内存限制。降低编译参数不能保证任意内存容量都能完成构建。
 

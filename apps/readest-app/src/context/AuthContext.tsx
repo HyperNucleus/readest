@@ -10,7 +10,7 @@ import {
   useEffect,
   useRef,
 } from 'react';
-import { User } from '@supabase/supabase-js';
+import { isAuthRetryableFetchError, User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 import posthog from 'posthog-js';
 import { accessPolicy, isAllowedUser } from '@/config/accessPolicy';
@@ -27,12 +27,27 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const readCachedSession = (): { token: string; user: User } | null => {
+  if (accessPolicy.requireLogin || typeof window === 'undefined') return null;
+  const token = localStorage.getItem('token');
+  const user = localStorage.getItem('user');
+  if (!token || !user) return null;
+  try {
+    return { token, user: JSON.parse(user) };
+  } catch {
+    return null;
+  }
+};
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
+  const [cachedSession] = useState(readCachedSession);
+  const [token, setToken] = useState<string | null>(cachedSession?.token ?? null);
+  const [user, setUser] = useState<User | null>(cachedSession?.user ?? null);
+  const [status, setStatus] = useState<AuthContextType['status']>(
+    cachedSession ? 'authenticated' : 'loading',
+  );
   const generation = useRef(0);
-  const currentToken = useRef<string | null>(null);
+  const currentToken = useRef<string | null>(token);
   const cookieQueue = useRef<Promise<unknown>>(Promise.resolve());
   const isWeb = process.env['NEXT_PUBLIC_APP_PLATFORM'] !== 'tauri';
 
@@ -121,21 +136,49 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           data.session?.user,
         );
       } catch {
-        if (active && attempt === generation.current) clear();
+        if (accessPolicy.requireLogin && active && attempt === generation.current) clear();
       }
     };
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+    const restoreCachedSession = async (refreshToken: string, attempt: number) => {
+      try {
+        const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+        if (!active || attempt !== generation.current) return;
+        if (error && isAuthRetryableFetchError(error)) return;
+        if (data.session?.refresh_token) {
+          localStorage.setItem('refresh_token', data.session.refresh_token);
+        }
+        await acceptSession(
+          error ? null : (data.session?.access_token ?? null),
+          data.session?.user,
+        );
+      } catch {
+        // A network failure leaves the cached session available in public mode.
+      }
+    };
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.refresh_token) localStorage.setItem('refresh_token', session.refresh_token);
       // Do not await another auth method inside Supabase's auth-state lock.
       clearTimeout(eventTimer);
       const eventGeneration = ++generation.current;
       eventTimer = setTimeout(() => {
-        if (active && eventGeneration === generation.current)
+        if (!active || eventGeneration !== generation.current) return;
+        // The SDK can report a null initial session after a failed startup
+        // refresh. In public mode, try the app's copy of the refresh token.
+        const refreshToken =
+          !accessPolicy.requireLogin && event === 'INITIAL_SESSION' && !session
+            ? localStorage.getItem('refresh_token')
+            : null;
+        if (refreshToken) {
+          void restoreCachedSession(refreshToken, eventGeneration);
+        } else {
           void acceptSession(session?.access_token ?? null, session?.user);
+        }
       }, 0);
     });
-    void restore();
-    window.addEventListener('focus', restore);
+    if (accessPolicy.requireLogin) {
+      void restore();
+      window.addEventListener('focus', restore);
+    }
     return () => {
       active = false;
       generation.current++;

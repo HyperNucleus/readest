@@ -15,6 +15,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useEnsureSettingsLoaded } from '@/hooks/useEnsureSettingsLoaded';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useTrafficLightStore } from '@/store/trafficLightStore';
+import { useReaderStore } from '@/store/readerStore';
 import { getBaseUrl, isTauriAppPlatform } from '@/services/environment';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { start, cancel, onUrl, onInvalidUrl } from '@fabianlars/tauri-plugin-oauth';
@@ -38,6 +39,10 @@ const WEB_AUTH_CALLBACK = `${getBaseUrl()}/auth/callback`;
 // 独立协议确保登录回跳进入个人版，而不是同时安装的官方版。
 const DEEPLINK_CALLBACK = `${process.env['NEXT_PUBLIC_APP_SCHEME'] || 'readest'}://auth-callback`;
 const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true';
+
+// A book stays open in the reader beneath while the login page sits over it
+// (the reader keeps its books when a page opens on top, #6607).
+const isReaderBeneath = () => Object.keys(useReaderStore.getState().viewStates).length > 0;
 
 export default function AuthPage() {
   const _ = useTranslation();
@@ -250,8 +255,12 @@ export default function AuthPage() {
       }
     })();
     const redirectTo = new URLSearchParams(window.location.search).get('redirect');
-    if (redirectTo) {
-      router.push(safeAuthRedirect(redirectTo));
+    // Go back to the reader rather than pushing the redirect over /auth: a
+    // pushed entry leaves /auth in the history, and the reader's Android back
+    // key reopens the login page from it (#7567). Replace when nothing is open
+    // beneath, e.g. a cold-loaded /auth?redirect=...
+    if (redirectTo && !isReaderBeneath()) {
+      router.replace(safeAuthRedirect(redirectTo));
     } else {
       router.back();
     }
@@ -287,7 +296,12 @@ export default function AuthPage() {
         const now = Date.now();
         localStorage.setItem(lastRedirectAtKey, now.toString());
         if (now - lastRedirectAt > 3000) {
-          router.push(safeAuthRedirect(redirectTo));
+          // Same as handleGoBack: never leave /auth on the history stack.
+          if (redirectTo && isReaderBeneath()) {
+            router.back();
+          } else {
+            router.replace(safeAuthRedirect(redirectTo));
+          }
         }
       }
     });
@@ -300,7 +314,12 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (accessPolicy.requireLogin && status === 'authenticated') {
-      router.replace(safeAuthRedirect(new URLSearchParams(window.location.search).get('redirect')));
+      const redirectTo = new URLSearchParams(window.location.search).get('redirect');
+      if (redirectTo && isReaderBeneath()) {
+        router.back();
+      } else {
+        router.replace(safeAuthRedirect(redirectTo));
+      }
     }
   }, [status, router]);
 

@@ -38,6 +38,12 @@ const h = vi.hoisted(() => ({
   updateBooknotes: vi.fn(),
   deselect: vi.fn(),
   restoreSelectionRange: vi.fn(() => true),
+  lookupSettings: {
+    providerEnabled: {} as Record<string, boolean>,
+    saveLookupsToVocabulary: true,
+  },
+  invokeSystemDictionary: vi.fn(),
+  recordLookup: vi.fn(),
   isTextSelected: { current: true },
   appService: {} as { isIOSApp?: boolean },
   onNativeTouch: null as null | ((ev: { type: string; x: number; y: number }) => void),
@@ -52,6 +58,8 @@ const h = vi.hoisted(() => ({
   setSelection: null as
     | null
     | ((update: (prev: TextSelection | null) => TextSelection | null) => void),
+  // On for a test that lays the book cell and the selection out itself.
+  realPopupGeometry: false,
 }));
 
 const settings = {
@@ -151,8 +159,18 @@ vi.mock('@/store/sidebarStore', () => ({
 vi.mock('@/store/customDictionaryStore', () => ({
   useCustomDictionaryStore: Object.assign(
     () => ({ loadCustomDictionaries: vi.fn().mockResolvedValue(undefined) }),
-    { getState: () => ({ settings: { providerEnabled: {} } }) },
+    { getState: () => ({ settings: h.lookupSettings }) },
   ),
+}));
+
+vi.mock('@/services/dictionaries/systemDictionary', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/dictionaries/systemDictionary')>()),
+  isSystemDictionarySupported: () => true,
+  invokeSystemDictionary: h.invokeSystemDictionary,
+}));
+
+vi.mock('@/store/vocabularyStore', () => ({
+  useVocabularyStore: { getState: () => ({ recordLookup: h.recordLookup }) },
 }));
 
 vi.mock('@/store/deviceStore', () => ({
@@ -222,13 +240,20 @@ vi.mock('@/app/reader/hooks/useTextSelector', () => ({
 }));
 
 // jsdom lays nothing out, so the real popup positioning bails on a zero rect
-// and no popup ever renders. Feed it fixed anchor points instead.
+// and no popup ever renders. Feed it fixed anchor points instead, unless the
+// test lays things out itself.
 vi.mock('@/utils/sel', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/sel')>();
   return {
     ...actual,
-    getPosition: () => ({ point: { x: 120, y: 200 }, dir: 'up' as const }),
-    getPopupPosition: () => ({ point: { x: 120, y: 140 }, dir: 'up' as const }),
+    getPosition: (...args: Parameters<typeof actual.getPosition>) =>
+      h.realPopupGeometry
+        ? actual.getPosition(...args)
+        : { point: { x: 120, y: 200 }, dir: 'up' as const },
+    getPopupPosition: (...args: Parameters<typeof actual.getPopupPosition>) =>
+      h.realPopupGeometry
+        ? actual.getPopupPosition(...args)
+        : { point: { x: 120, y: 140 }, dir: 'up' as const },
   };
 });
 
@@ -250,15 +275,34 @@ vi.mock('@/app/reader/components/annotator/AnnotationPopup', () => ({
 // way the real one does on every render, so rendering one without a word fails
 // the same way (#6419).
 vi.mock('@/app/reader/components/annotator/DictionaryPopup', () => ({
-  default: ({ word, onDismiss }: { word: string; onDismiss: () => void }) => (
-    <div data-testid='dictionary-surface' data-word={word.trim()}>
+  default: ({
+    word,
+    onDismiss,
+    position,
+    trianglePosition,
+    popupHeight,
+  }: {
+    word: string;
+    onDismiss: () => void;
+    position: { point: { y: number } };
+    trianglePosition: { point: { y: number } };
+    popupHeight: number;
+  }) => (
+    <div
+      data-testid='dictionary-surface'
+      data-kind='popup'
+      data-word={word.trim()}
+      data-top={position.point.y}
+      data-height={popupHeight}
+      data-triangle-y={trianglePosition.point.y}
+    >
       <button type='button' data-testid='dictionary-dismiss' onClick={onDismiss} />
     </div>
   ),
 }));
 vi.mock('@/app/reader/components/annotator/DictionarySheet', () => ({
   default: ({ word, onDismiss }: { word: string; onDismiss: () => void }) => (
-    <div data-testid='dictionary-surface' data-word={word.trim()}>
+    <div data-testid='dictionary-surface' data-kind='sheet' data-word={word.trim()}>
       <button type='button' data-testid='dictionary-dismiss' onClick={onDismiss} />
     </div>
   ),
@@ -274,7 +318,7 @@ vi.mock('@/app/reader/components/annotator/ProofreadPopup', () => ({
 
 import Annotator from '@/app/reader/components/annotator/Annotator';
 
-const selectText = async () => {
+const selectText = async (text = 'selected text') => {
   // The selection effect needs the book's grid cell to measure against.
   if (!document.querySelector('#gridcell-book-1')) {
     const gridCell = document.createElement('div');
@@ -282,7 +326,7 @@ const selectText = async () => {
     document.body.append(gridCell);
   }
   const paragraph = document.createElement('p');
-  paragraph.textContent = 'selected text';
+  paragraph.textContent = text;
   document.body.append(paragraph);
   const range = document.createRange();
   range.selectNodeContents(paragraph);
@@ -311,6 +355,8 @@ beforeEach(() => {
   h.foliateHandlers = null;
   h.config.booknotes = [];
   h.isTextSelected.current = true;
+  h.lookupSettings.providerEnabled = {};
+  h.lookupSettings.saveLookupsToVocabulary = true;
   h.setSelection = null;
   h.viewSettings.enableAnnotationQuickActions = false;
   h.viewSettings.annotationQuickAction = '';
@@ -320,6 +366,37 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+test.each([
+  [true, true, true],
+  [true, false, false],
+  [false, true, false],
+])('system dictionary saves lookups when enabled (%s) and launched (%s)', async (saveLookups, launched, saved) => {
+  h.lookupSettings.providerEnabled = { 'builtin:system': true };
+  h.lookupSettings.saveLookupsToVocabulary = saveLookups;
+  h.invokeSystemDictionary.mockResolvedValue(launched);
+  render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+  await selectText('serendipity');
+
+  await act(async () => {
+    h.actions?.['onDictionarySelection']?.();
+  });
+
+  expect(h.invokeSystemDictionary.mock.calls[0]?.[0]).toBe('serendipity');
+  expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+  if (saved) {
+    expect(h.recordLookup).toHaveBeenCalledWith({
+      word: 'serendipity',
+      lang: 'en',
+      occurrence: expect.objectContaining({
+        cfi: 'epubcfi(/6/2!/4/2)',
+        sentence: 'serendipity',
+      }),
+    });
+  } else {
+    expect(h.recordLookup).not.toHaveBeenCalled();
+  }
+});
 
 describe('a lookup surface survives the selection it is anchored to being republished', () => {
   test.each([
@@ -477,6 +554,78 @@ describe('the instant dictionary hands the selection back when it closes', () =>
     expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
     expect(h.deselect).toHaveBeenCalled();
     expect(h.isTextSelected.current).toBe(false);
+  });
+
+  test('stays a popup when the keyboard for its hint field shortens the window (#7570)', async () => {
+    const setViewport = (width: number, height: number) => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+    };
+    const { innerWidth, innerHeight } = window;
+    try {
+      // An iPad in landscape; typing a Learning word's hint raises the keyboard.
+      setViewport(1180, 820);
+      const insets = { top: 0, right: 0, bottom: 0, left: 0 };
+      const { rerender } = render(<Annotator bookKey='book-1' contentInsets={insets} />);
+      await selectWord();
+      expect(screen.getByTestId('dictionary-surface').dataset['kind']).toBe('popup');
+
+      setViewport(1180, 420);
+      rerender(<Annotator bookKey='book-1' contentInsets={{ ...insets }} />);
+
+      expect(screen.getByTestId('dictionary-surface').dataset['kind']).toBe('popup');
+    } finally {
+      setViewport(innerWidth, innerHeight);
+    }
+  });
+
+  test('places the popup again inside the window the keyboard shortened (#7570)', async () => {
+    const setViewport = (width: number, height: number) => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+    };
+    const { innerWidth, innerHeight } = window;
+    // The book cell fills the window, and the word sits on the page's last line
+    // wherever the page now ends: the keyboard shortens the page with the window.
+    let gridCell = document.querySelector<HTMLElement>('#gridcell-book-1');
+    if (!gridCell) {
+      gridCell = document.createElement('div');
+      gridCell.id = 'gridcell-book-1';
+      document.body.append(gridCell);
+    }
+    gridCell.getBoundingClientRect = () => new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => [new DOMRect(500, window.innerHeight - 60, 100, 20)],
+    });
+    h.realPopupGeometry = true;
+    try {
+      setViewport(1180, 820);
+      render(
+        <Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />,
+      );
+      await selectWord();
+      const popup = screen.getByTestId('dictionary-surface');
+      expect(popup.dataset['kind']).toBe('popup');
+
+      setViewport(1180, 420);
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+
+      // The same popup, not a remount, so its hint field keeps the focus.
+      expect(screen.getByTestId('dictionary-surface')).toBe(popup);
+      const top = Number(popup.dataset['top']);
+      const bottom = top + Number(popup.dataset['height']);
+      expect(top, 'popup top edge').toBeGreaterThanOrEqual(0);
+      expect(bottom, 'popup bottom edge').toBeLessThanOrEqual(420);
+      expect(Number(popup.dataset['triangleY']), 'popup anchor').toBeLessThanOrEqual(420);
+    } finally {
+      h.realPopupGeometry = false;
+      delete (Range.prototype as { getClientRects?: unknown }).getClientRects;
+      gridCell.remove();
+      setViewport(innerWidth, innerHeight);
+    }
   });
 
   test('restores the selection and returns the toolbar on dismiss', async () => {

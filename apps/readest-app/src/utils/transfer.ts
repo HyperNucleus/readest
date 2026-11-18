@@ -1,4 +1,5 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
+import { personalResourceHeaders } from '@/utils/personalResourceAuth';
 
 export type UploadMethod = 'POST' | 'PUT';
 
@@ -189,7 +190,7 @@ export const tauriUpload = async (
     url,
     filePath,
     method,
-    headers: headers ?? {},
+    headers: { ...headers, ...(await personalResourceHeaders(url, '/readest-files/')) },
     onProgress,
   });
 };
@@ -212,15 +213,18 @@ export const tauriDownload = async (
     onProgress.onmessage = progressHandler;
   }
 
+  const personalHeaders =
+    (await personalResourceHeaders(url, '/readest-files/')) ??
+    (await personalResourceHeaders(url, '/updates/'));
   const responseHeaders = await invoke<Record<string, string>>('download_file', {
     id,
     url,
     filePath,
-    headers: headers ?? {},
+    headers: { ...headers, ...personalHeaders },
     onProgress,
     body,
     singleThreaded,
-    skipSslVerification,
+    skipSslVerification: personalHeaders ? false : skipSslVerification,
   });
   return responseHeaders;
 };

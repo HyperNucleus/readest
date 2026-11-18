@@ -144,6 +144,10 @@ async function interactive() {
       translationQuota: await integer('翻译配额（沿用项目的字符计数规则；需可用翻译服务）', old.translationQuota || 50000, 1, 100000000),
       fontBaseUrl: await optional('可选：自托管 CJK 字体目录 URL；留空用上游资源（其 CORS 可能不支持自定义域名）', old.fontBaseUrl),
       trustedHosts: await optional('可选：允许 OPDS 代理访问的内网主机，逗号分隔；留空禁止', old.trustedHosts),
+      protectPrivateResources: await confirm({
+        message: '要求登录后才能访问安装包、更新和书籍文件？升级已有部署时请先迁移客户端。',
+        default: old.protectPrivateResources ?? !old.serverUrl,
+      }),
       secrets: old.secrets || newSecrets(),
     };
     if (s.fontBaseUrl && (!s.fontBaseUrl.startsWith('https://') || /\s/.test(s.fontBaseUrl))) throw new Error('字体地址需为 HTTPS URL');

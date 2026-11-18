@@ -1,9 +1,11 @@
 import { accessPolicy } from '@/config/accessPolicy';
 import { ImageResponse } from 'next/og';
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { getDownloadSignedUrl } from '@/utils/object';
 import { rejectionToHttp, resolveActiveShare } from '@/libs/shareServer';
 import { SHARE_PRESIGN_TTL_SECONDS } from '@/services/constants';
+import { getRequestOrigin, getRequestToken } from '@/utils/serverAuth';
+import { isPersonalDeployment } from '@/services/personal';
 
 // JSX renderer for the OG image. Lives in a non-route `.tsx` so the route
 // file itself can be `.ts` and get filtered out of the Tauri static export
@@ -13,7 +15,10 @@ import { SHARE_PRESIGN_TTL_SECONDS } from '@/services/constants';
 const WIDTH = 1200;
 const HEIGHT = 630;
 
-export const renderShareOgImage = async (token: string): Promise<Response> => {
+export const renderShareOgImage = async (
+  token: string,
+  request: NextRequest,
+): Promise<Response> => {
   const result = await resolveActiveShare(token);
   if (!result.ok) {
     const { status, body } = rejectionToHttp(result.reason);
@@ -25,7 +30,21 @@ export const renderShareOgImage = async (token: string): Promise<Response> => {
   if (share.coverFileKey) {
     try {
       const signedUrl = await getDownloadSignedUrl(share.coverFileKey, SHARE_PRESIGN_TTL_SECONDS);
-      const response = await fetch(signedUrl);
+      const url = new URL(signedUrl);
+      const session =
+        isPersonalDeployment() &&
+        url.origin === getRequestOrigin(request) &&
+        url.pathname.startsWith('/readest-files/') &&
+        getRequestToken(request);
+      const response = await fetch(
+        signedUrl,
+        session
+          ? {
+              headers: { Authorization: `Bearer ${session}` },
+              redirect: 'error',
+            }
+          : undefined,
+      );
       if (response.ok) {
         const buffer = await response.arrayBuffer();
         const contentType = response.headers.get('content-type') ?? 'image/jpeg';

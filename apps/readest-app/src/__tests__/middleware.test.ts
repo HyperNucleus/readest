@@ -1,7 +1,25 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { middleware } from '@/middleware';
+
+it('protects personal static resources while serving login assets', async () => {
+  vi.stubEnv('READEST_PERSONAL', 'true');
+  try {
+    const get = (path: string) => middleware(new NextRequest(`https://reader.example${path}`));
+    for (const path of ['/downloads', '/assets/komorebi.mp4', '/vendor/pdfjs/file.mjs']) {
+      const response = await get(path);
+      expect(response.status).toBe(307);
+      expect(new URL(response.headers.get('Location')!).searchParams.get('redirect')).toBe(path);
+    }
+    for (const path of ['/auth', '/locales/zh-CN/translation.json', '/fonts/InterVariable.woff2']) {
+      const response = await get(path);
+      expect(response.status).toBe(200);
+    }
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 const coep = async (path: string) =>
   (await middleware(new NextRequest(`http://localhost:3000${path}`))).headers.get(

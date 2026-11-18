@@ -14,3 +14,17 @@ test('direct REST calls use the app access policy without blocking sign-in', () 
   assert.ok(authBlock);
   assert.doesNotMatch(authBlock, /auth_request/);
 });
+
+test('strict resource mode protects downloads and storage without forwarding session credentials to MinIO', () => {
+  const config = nginxConfig({
+    serverUrl: 'https://reader.example', certificate: '/cert.pem', certificateKey: '/key.pem',
+    dataDir: '/data', ports: { client: 3000, kong: 8000, s3: 9000 }, protectPrivateResources: true,
+  });
+  for (const prefix of ['/readest-files/', '/updates/']) {
+    const location = config.split(`location ${prefix} {`)[1]?.split('}')[0];
+    assert.match(location, /auth_request \/_readest_access;/);
+    assert.match(location, /Cache-Control "private, no-store"/);
+  }
+  assert.match(config, /proxy_set_header Authorization "";/);
+  assert.match(config, /proxy_set_header Cookie "";/);
+});

@@ -199,6 +199,7 @@ describe('updater', () => {
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
+        ok: true,
         json: () =>
           Promise.resolve({
             version: '2.0.0',
@@ -218,6 +219,7 @@ describe('updater', () => {
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
+        ok: true,
         json: () =>
           Promise.resolve({
             version: '2.0.0',
@@ -237,6 +239,7 @@ describe('updater', () => {
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
+        ok: true,
         json: () =>
           Promise.resolve({
             version: '2.0.0',
@@ -261,6 +264,7 @@ describe('updater', () => {
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
+        ok: true,
         json: () =>
           Promise.resolve({
             version: '2.0.0',
@@ -278,6 +282,7 @@ describe('updater', () => {
       mockAppVersion = '2.0.0';
 
       mockTauriFetch.mockResolvedValue({
+        ok: true,
         json: () =>
           Promise.resolve({
             version: '1.0.0',

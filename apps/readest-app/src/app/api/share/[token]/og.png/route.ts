@@ -1,4 +1,5 @@
 import { renderShareOgImage } from './render';
+import type { NextRequest } from 'next/server';
 
 // Intentionally NO `export const runtime = 'edge'`.
 //
@@ -25,7 +26,7 @@ interface RouteParams {
 // Twitter, Slack) cache aggressively, so a short-lived signed cover URL would
 // break previews after expiry. By proxying through this route we get a stable
 // URL even though the underlying R2 object is presigned per-fetch.
-export async function GET(_request: Request, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
   const { token } = await params;
-  return renderShareOgImage(token);
+  return renderShareOgImage(token, request);
 }

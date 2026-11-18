@@ -8,11 +8,13 @@ import { AUTH_HEADER, SESSION_COOKIE, isAllowedUser } from '@/config/accessPolic
 export const getRequestOrigin = (request: NextRequest) =>
   new URL(process.env['API_BASE_URL'] || process.env['SITE_URL'] || request.url).origin;
 
-export const getRequestToken = (request: NextRequest) => {
+const getBearerToken = (request: NextRequest) => {
   const header = request.headers.get(AUTH_HEADER) || request.headers.get('authorization');
-  const bearer = header?.match(/^Bearer (\S+)$/i)?.[1];
-  return bearer || request.cookies.get(SESSION_COOKIE)?.value;
+  return header?.match(/^Bearer (\S+)$/i)?.[1];
 };
+
+export const getRequestToken = (request: NextRequest) =>
+  getBearerToken(request) || request.cookies.get(SESSION_COOKIE)?.value;
 
 export const verifyAccessToken = async (token?: string) => {
   if (!token) return null;
@@ -26,9 +28,8 @@ export const verifyAccessToken = async (token?: string) => {
 
 // Cookie-authenticated writes must originate from this app. Native clients use
 // an explicit token header instead; third-party OPDS credentials are unrelated.
-export const isUnsafeCookieRequest = (request: NextRequest) => {
-  if (/^(GET|HEAD|OPTIONS)$/.test(request.method)) return false;
-  if (request.headers.get(AUTH_HEADER)?.match(/^Bearer /i)) return false;
-  if (request.headers.get('authorization')?.match(/^Bearer /i)) return false;
+export const isUnsafeCookieRequest = (request: NextRequest, method = request.method) => {
+  if (/^(GET|HEAD|OPTIONS)$/.test(method)) return false;
+  if (getBearerToken(request)) return false;
   return request.headers.get('origin') !== getRequestOrigin(request);
 };

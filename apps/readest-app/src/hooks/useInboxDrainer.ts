@@ -4,6 +4,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { fetchWithAuth } from '@/utils/fetch';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { personalResourceHeaders } from '@/utils/personalResourceAuth';
 import { getAPIBaseUrl } from '@/services/environment';
 import { isTauriAppPlatform } from '@/services/environment';
 import { ingestFile } from '@/services/ingestService';
@@ -102,7 +104,12 @@ export function useInboxDrainer(): void {
         });
         if (!res.ok) throw new Error(`Payload download failed (${res.status})`);
         const { downloadUrl } = (await res.json()) as { downloadUrl: string };
-        const fileRes = await fetch(downloadUrl);
+        const headers = isTauriAppPlatform()
+          ? await personalResourceHeaders(downloadUrl, '/readest-files/')
+          : undefined;
+        const fileRes = headers
+          ? await tauriFetch(downloadUrl, { headers })
+          : await fetch(downloadUrl);
         if (!fileRes.ok) throw new Error(`Payload fetch failed (${fileRes.status})`);
         const bytes = await fileRes.arrayBuffer();
         const filename = item.filename ?? 'document';

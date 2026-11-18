@@ -66,6 +66,7 @@ vi.mock('@/utils/version', async () => {
 vi.mock('@/helpers/updater', async () => {
   const actual = await vi.importActual<typeof import('@/helpers/updater')>('@/helpers/updater');
   return {
+    checkForDesktopUpdate: actual.checkForDesktopUpdate,
     setLastShownReleaseNotesVersion: vi.fn(),
     getAndroidPlatformKey: actual.getAndroidPlatformKey,
   };

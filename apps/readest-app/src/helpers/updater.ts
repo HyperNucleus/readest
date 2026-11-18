@@ -8,6 +8,7 @@ import { TranslationFunc } from '@/hooks/useTranslation';
 import { setUpdaterWindowVisible } from '@/components/UpdaterWindow';
 import { isTauriAppPlatform } from '@/services/environment';
 import { getAppVersion, isUpdateNewer } from '@/utils/version';
+import { isPersonalResourceUrl, personalResourceHeaders } from '@/utils/personalResourceAuth';
 import {
   CHECK_UPDATE_INTERVAL_SEC,
   READEST_CHANGELOG_FILE,
@@ -36,6 +37,23 @@ const showUpdateWindow = (latestVersion: string, scrollBarStyle: ScrollBarStyle)
 };
 
 type FetchFn = typeof fetch;
+
+export const checkForDesktopUpdate = async () => {
+  const headers = await personalResourceHeaders(READEST_UPDATER_FILE, '/updates/');
+  const update = await (headers ? check({ headers }) : check());
+  if (update && isPersonalResourceUrl(READEST_UPDATER_FILE, '/updates/')) {
+    const manifest = update.rawJson as Partial<UpdateManifest> & UpdateManifestEntry;
+    const entries = manifest.platforms ? Object.values(manifest.platforms) : [manifest];
+    if (
+      !entries.length ||
+      entries.some((entry) => !entry?.url || !isPersonalResourceUrl(entry.url, '/updates/'))
+    ) {
+      await update.close();
+      throw new Error('Invalid personal update URL');
+    }
+  }
+  return update;
+};
 
 export interface UpdateManifestEntry {
   url?: string;
@@ -174,7 +192,7 @@ export const checkForAppUpdates = async (
     }
 
     if (['macos', 'windows', 'linux'].includes(OS_TYPE)) {
-      const update = await check();
+      const update = await checkForDesktopUpdate();
       if (update) {
         // Enum ScrollBarStyle is exported as type by tauri, so it cannot be used directly.
         const scrollBarStyle = (OS_TYPE === 'windows'
@@ -185,7 +203,9 @@ export const checkForAppUpdates = async (
       return !!update;
     } else if (OS_TYPE === 'android') {
       try {
-        const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000 });
+        const headers = await personalResourceHeaders(READEST_UPDATER_FILE, '/updates/');
+        const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000, headers });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         const isNewer = semver.gt(data.version, getAppVersion());
         if (isNewer && getAndroidPlatformKey(osArch()) in data.platforms) {
@@ -227,7 +247,10 @@ export const checkAppReleaseNotes = async (isAutoCheck = true) => {
   if ((lastShownVersion && semver.gt(currentVersion, lastShownVersion)) || !isAutoCheck) {
     try {
       const fetchFunc = isTauriAppPlatform() ? fetch : window.fetch;
-      const res = await fetchFunc(READEST_CHANGELOG_FILE);
+      const headers = await personalResourceHeaders(READEST_CHANGELOG_FILE, '/updates/');
+      const res = await (headers
+        ? fetchFunc(READEST_CHANGELOG_FILE, { headers })
+        : fetchFunc(READEST_CHANGELOG_FILE));
       if (res.ok) {
         setUpdaterWindowVisible(true, currentVersion, lastShownVersion, false);
         return true;

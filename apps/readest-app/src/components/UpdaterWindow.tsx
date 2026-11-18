@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useEnv } from '@/context/EnvContext';
 import { useEffect, useState } from 'react';
 import { type as osType, arch as osArch } from '@tauri-apps/plugin-os';
-import { check, Update } from '@tauri-apps/plugin-updater';
+import { Update } from '@tauri-apps/plugin-updater';
 import { relaunch, exit } from '@tauri-apps/plugin-process';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { Command } from '@tauri-apps/plugin-shell';
@@ -21,7 +21,12 @@ import { tauriDownload } from '@/utils/transfer';
 import { installPackage, verifyUpdateSignature, installNightlyUpdate } from '@/utils/bridge';
 import { join } from '@tauri-apps/api/path';
 import { getLocale } from '@/utils/misc';
-import { getAndroidPlatformKey, setLastShownReleaseNotesVersion } from '@/helpers/updater';
+import {
+  checkForDesktopUpdate,
+  getAndroidPlatformKey,
+  setLastShownReleaseNotesVersion,
+} from '@/helpers/updater';
+import { personalResourceHeaders } from '@/utils/personalResourceAuth';
 import type { ResolvedNightlyUpdate } from '@/helpers/updater';
 import {
   READEST_UPDATER_FILE,
@@ -125,7 +130,7 @@ export const UpdaterContent = ({
 
   useEffect(() => {
     const checkDesktopUpdate = async () => {
-      const update = await check();
+      const update = await checkForDesktopUpdate();
       if (update) {
         setUpdate(update);
       }
@@ -133,7 +138,9 @@ export const UpdaterContent = ({
     const checkAndroidUpdate = async () => {
       if (!appService) return;
       const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
-      const response = await fetch(READEST_UPDATER_FILE);
+      const headers = await personalResourceHeaders(READEST_UPDATER_FILE, '/updates/');
+      const response = await fetch(READEST_UPDATER_FILE, { headers });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (semver.gt(data.version, currentVersion)) {
         const platformKey = getAndroidPlatformKey(osArch());
@@ -399,7 +406,9 @@ export const UpdaterContent = ({
     const fetchChangelogs = async (fromVersion: string): Promise<Changelog[]> => {
       try {
         const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
-        const res = await fetch(READEST_CHANGELOG_FILE);
+        const headers = await personalResourceHeaders(READEST_CHANGELOG_FILE, '/updates/');
+        const res = await fetch(READEST_CHANGELOG_FILE, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: ReleaseNotes = await res.json();
         const releases = data.releases;
 
@@ -470,7 +479,7 @@ export const UpdaterContent = ({
     setProgress(0);
     setIsDownloading(true);
     try {
-      await update.downloadAndInstall?.((event) => {
+      const onEvent = (event: DownloadEvent) => {
         switch (event.event) {
           case 'Started':
             contentLength = event.data.contentLength!;
@@ -493,7 +502,13 @@ export const UpdaterContent = ({
             setProgress(100);
             break;
         }
-      });
+      };
+      if (update instanceof Update && isPersonalDeployment()) {
+        const headers = await personalResourceHeaders(READEST_UPDATER_FILE, '/updates/');
+        await update.downloadAndInstall(onEvent, { headers: headers ?? {} });
+      } else {
+        await update.downloadAndInstall?.(onEvent);
+      }
       console.log('package installed');
       if (!appService?.isAndroidApp && process.env.NODE_ENV === 'production') {
         await relaunch();

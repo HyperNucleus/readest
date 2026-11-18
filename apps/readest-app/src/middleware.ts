@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { accessPolicy, isPublicAuthPage } from '@/config/accessPolicy';
 import { getRequestToken, verifyAccessToken, isUnsafeCookieRequest } from '@/utils/serverAuth';
+import { isPersonalDeployment } from '@/services/personal';
 
 const allowedOrigins = [
   'https://web.readest.com',
@@ -19,7 +20,7 @@ const corsOptions = {
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isApi = path === '/api' || path.startsWith('/api/');
-  const isSession = path === '/api/auth/session';
+  const handlesOwnAuth = path === '/api/auth/session' || path === '/api/auth/access';
   // Static assets carry no private user data. API paths are never exempted by
   // an extension (share covers and generated images are business endpoints).
   const isPublic =
@@ -27,10 +28,15 @@ export async function middleware(request: NextRequest) {
     (isPublicAuthPage(path) ||
       path === '/runtime-config.js' ||
       /^\/swe-worker-[a-f0-9]+\.js$/.test(path) ||
-      ['/_next/', '/assets/', '/fonts/', '/images/', '/locales/', '/vendor/', '/workers/'].some(
-        (prefix) => path.startsWith(prefix),
-      ) ||
+      path.startsWith('/locales/') ||
+      path.startsWith('/_next/static/') ||
+      (!isPersonalDeployment() &&
+        ['/_next/', '/assets/', '/fonts/', '/images/', '/vendor/', '/workers/'].some((prefix) =>
+          path.startsWith(prefix),
+        )) ||
       [
+        '/fonts/InterVariable.woff2',
+        '/fonts/InterVariable-Italic.woff2',
         '/favicon.ico',
         '/icon.png',
         '/icon-tiny.png',
@@ -39,7 +45,7 @@ export async function middleware(request: NextRequest) {
         '/sw.js',
       ].includes(path));
   let authResponse: NextResponse | undefined;
-  if (accessPolicy.requireLogin && !isSession && !isPublic && request.method !== 'OPTIONS') {
+  if (accessPolicy.requireLogin && !handlesOwnAuth && !isPublic && request.method !== 'OPTIONS') {
     const user = await verifyAccessToken(getRequestToken(request));
     if (!user) {
       if (isApi) {
@@ -113,5 +119,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|sw.js|manifest.json).*)'],
+  matcher: ['/((?!_next/static/).*)'],
 };

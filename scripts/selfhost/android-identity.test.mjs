@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { applyIdentity, buildTargets, patchWindowsAndroidTurso } from './build.mjs';
+import { ROOT } from './config.mjs';
 
 test('Windows offers both NSIS and Android APK while Linux and macOS keep their targets', () => {
   assert.deepEqual(buildTargets('win32', 'x64'), ['windows-x86_64', 'android-arm64']);
@@ -20,7 +21,8 @@ test('Windows Android builds patch the Turso linker check only in the staged wor
   const buildScript = 'fn main() { if cfg!(target_os = "windows") { println!("cargo:rustc-link-lib=advapi32"); } }\n';
   await mkdir(stage);
   await mkdir(source);
-  await writeFile(path.join(stage, 'Cargo.toml'), '[patch.crates-io]\ntauri = { path = "packages/tauri" }\n');
+  const manifest = (await readFile(path.join(ROOT, 'Cargo.toml'), 'utf8')).replace(/\r?\n/g, '\r\n');
+  await writeFile(path.join(stage, 'Cargo.toml'), manifest);
   await writeFile(path.join(source, 'build.rs'), buildScript);
   await patchWindowsAndroidTurso(stage, async (command, args, options) => {
     assert.equal(command, 'cargo');
@@ -34,7 +36,8 @@ test('Windows Android builds patch the Turso linker check only in the staged wor
   assert.equal(await readFile(path.join(stage, 'patches/turso_ext-0.6.1/build.rs'), 'utf8'),
     buildScript.replace('cfg!(target_os = "windows")', 'std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")'));
   assert.equal(await readFile(path.join(stage, 'Cargo.toml'), 'utf8'),
-    '[patch.crates-io]\nturso_ext = { path = "patches/turso_ext-0.6.1" }\ntauri = { path = "packages/tauri" }\n');
+    manifest.replace('\r\n[patch.crates-io]\r\n',
+      '\r\n[patch.crates-io]\r\nturso_ext = { path = "patches/turso_ext-0.6.1" }\r\n'));
 });
 
 test('personal Android identity relocates the handwritten activity into the generated package', async () => {

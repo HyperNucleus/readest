@@ -207,12 +207,15 @@ export async function patchWindowsAndroidTurso(stage, cargo = run) {
   const relative = 'patches/turso_ext-0.6.1';
   const workspace = path.join(stage, 'Cargo.toml');
   const manifest = await readFile(workspace, 'utf8');
-  if (!manifest.includes('[patch.crates-io]')) throw new Error('找不到 Cargo 工作区的 [patch.crates-io] 配置');
+  const patchTable = /^([ \t]*\[patch\.crates-io\][ \t]*(?:#[^\r\n]*)?)(\r?\n|$)/m;
+  if (!patchTable.test(manifest)) throw new Error('找不到 Cargo 工作区的 [patch.crates-io] 配置');
   await cp(sourceDir, path.join(stage, relative), { recursive: true });
   await writeFile(path.join(stage, relative, 'build.rs'), buildScript.replace(hostCheck,
     'std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")'));
-  await writeFile(workspace, manifest.replace('[patch.crates-io]',
-    `[patch.crates-io]\nturso_ext = { path = "${relative}" }`));
+  await writeFile(workspace, manifest.replace(patchTable, (_match, header, lineEnding) => {
+    const newline = lineEnding || '\n';
+    return `${header}${newline}turso_ext = { path = "${relative}" }${newline}`;
+  }));
 }
 
 export async function configureAndroidResources(stageApp) {

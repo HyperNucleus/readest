@@ -156,6 +156,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     };
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
+      // The SDK can emit SIGNED_OUT during startup, then a null INITIAL_SESSION
+      // before the deferred handler runs. Don't retry a session it rejected.
+      if (event === 'SIGNED_OUT') localStorage.removeItem('refresh_token');
       if (session?.refresh_token) localStorage.setItem('refresh_token', session.refresh_token);
       // Do not await another auth method inside Supabase's auth-state lock.
       clearTimeout(eventTimer);

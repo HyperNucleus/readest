@@ -104,6 +104,12 @@ export const useTextSelector = (
   const isPopuped = useRef(false);
   const isUpToPopup = useRef(false);
   const isTextSelected = useRef(false);
+  // A touch or pen tap while the selection toolbar is up is there to dismiss
+  // it. The webview clears the selection only after the release (WebView2 with
+  // the tap's compatibility mousedown), so the toolbar is already closed when
+  // the tap's single click arrives, and that click must not also turn the page.
+  // A mouse release marks its click instead (markSelectionDismissClick).
+  const isTapDismissingPopup = useRef(false);
   const isTouchStarted = useRef(false);
   // A touch selectionchange deferred until the gesture ends: iOS streams
   // selectionchange while a finger drags the system selection handles, and
@@ -586,6 +592,12 @@ export const useTextSelector = (
     const text = await getAnnotationText(range);
     if (publication !== selectionPublicationId.current) return;
     const progress = getProgress(bookKey);
+    // A touch selection on Windows and Linux takes the app's own handles. The
+    // webview draws touch handles only for a selection the user made, so they
+    // go when the release re-adds the range (`rebuildRange`), and nothing was
+    // left to extend the word a long press selects (#7820).
+    const desktopTouch =
+      lastPointerType.current === 'touch' && (osPlatform === 'windows' || osPlatform === 'linux');
     setSelection({
       key: bookKey,
       text,
@@ -593,13 +605,20 @@ export const useTextSelector = (
       page: bookData?.isFixedLayout ? index + 1 : progress?.page || 0,
       range,
       index,
-      handlesSuppressed,
+      handlesSuppressed: handlesSuppressed || desktopTouch,
       ...(navigated && { quickActionHandled: true }),
     });
   };
 
   const handleRendererRelocate = (event: Event) => {
-    if ((event as CustomEvent).detail?.reason === 'selection') navigatedSelectionRef.current = true;
+    const reason = (event as CustomEvent).detail?.reason;
+    if (reason === 'selection') navigatedSelectionRef.current = true;
+    // The paginator re-anchored after a re-layout, such as the Notebook pinning
+    // beside the page: keep the Android selection pin (handleScroll) on the
+    // page it chose, not on an offset from the old layout (#7789).
+    if (reason === 'anchor' && selectionPosition.current !== null) {
+      selectionPosition.current = getView(bookKey)?.renderer?.containerPosition ?? null;
+    }
   };
 
   const startInstantAnnotating = (
@@ -783,6 +802,8 @@ export const useTextSelector = (
     beginSelectionDrag();
     setImageHoldClick(bookKey, null);
     lastPointerType.current = ev.pointerType;
+    isTapDismissingPopup.current =
+      ev.pointerType !== 'mouse' && (isTextSelected.current || isPopuped.current);
     const selection = ev.pointerType === 'mouse' ? doc.getSelection() : null;
     mouseSelectionAtPointerDown.current = selection
       ? {
@@ -961,6 +982,8 @@ export const useTextSelector = (
 
   const handlePointerCancel = (doc: Document, _index: number, _ev: PointerEvent) => {
     isPointerDown.current = false;
+    // A cancelled press never clicks, so it has no single click to consume.
+    isTapDismissingPopup.current = false;
     mouseSelectionAtPointerDown.current = null;
     cancelImageHold();
     doc.documentElement.classList.remove(LINK_TOUCH_HOLD_CLASS);
@@ -1259,6 +1282,7 @@ export const useTextSelector = (
 
   const handleTouchCancel = () => {
     isTouchStarted.current = false;
+    isTapDismissingPopup.current = false;
     isPointerDown.current = false;
     pendingTouchSelection.current = false;
     endSelectionDrag();
@@ -1415,6 +1439,8 @@ export const useTextSelector = (
 
   useEffect(() => {
     const handleSingleClick = (): boolean => {
+      const tapDismissedPopup = isTapDismissingPopup.current;
+      isTapDismissingPopup.current = false;
       if (isUpToPopup.current) {
         isUpToPopup.current = false;
         return true;
@@ -1430,10 +1456,18 @@ export const useTextSelector = (
         handleDismissPopup();
         return true;
       }
-      return false;
+      return tapDismissedPopup;
     };
 
     eventDispatcher.onSync('iframe-single-click', handleSingleClick);
+    // Another iframe-single-click listener (auto-scroll, handwriting) can take a
+    // dismissing tap before handleSingleClick sees it. Presses on the page never
+    // reach this window, so a press here starts a click outside the page (the
+    // header, beside the page): the tap's mark must not swallow it.
+    const clearTapDismiss = () => {
+      isTapDismissingPopup.current = false;
+    };
+    window.addEventListener('pointerdown', clearTapDismiss, true);
     // After any auto page-turn, re-anchor the Android selection scroll-pin to the
     // page we landed on (the #873 pin in handleScroll). Harmless when nothing is
     // pinned (instant highlight / range editors carry no DOM selection).
@@ -1443,6 +1477,7 @@ export const useTextSelector = (
     });
     return () => {
       eventDispatcher.offSync('iframe-single-click', handleSingleClick);
+      window.removeEventListener('pointerdown', clearTapDismiss, true);
       unsubAfterTurn();
       instantGestureCleanup.current?.();
       if (instantHoldTimer.current) clearTimeout(instantHoldTimer.current);

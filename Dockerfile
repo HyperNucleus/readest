@@ -53,11 +53,14 @@ WORKDIR /app/apps/readest-app
 # next.config.mjs gates `output: 'standalone'` on BUILD_STANDALONE so other
 # web builds keep their default output.
 ENV BUILD_STANDALONE=true
-# 个人服务器使用 Webpack 内存优化；限制单个 Node 堆，为 4 GiB 构建器中的其他进程留空间。
-# 保留 Next 的类型检查，其他构建继续使用原有打包器。
-RUN if [ "$NEXT_PUBLIC_PERSONAL" = "true" ]; then \
-      NODE_OPTIONS=--max-old-space-size=3072 pnpm build-web --webpack; \
-    else pnpm build-web; fi
+# Serwist needs Webpack to emit public/sw.js. Keep the smaller Node heap for
+# personal builds on the 4 GiB builder.
+RUN pnpm patch-build-webpack && \
+    if [ "$NEXT_PUBLIC_PERSONAL" = "true" ]; then \
+      NODE_OPTIONS=--max-old-space-size=3072 pnpm build-web; \
+    else \
+      NODE_OPTIONS=--max-old-space-size=8192 pnpm build-web; \
+    fi
 
 # Production runtime ships only the standalone server, its traced node_modules,
 # and the static/public assets — no pnpm, no source tree, no dev dependencies,

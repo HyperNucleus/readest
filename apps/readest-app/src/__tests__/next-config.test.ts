@@ -93,3 +93,47 @@ describe('Browser-only database WASM', () => {
     expect(web.turbopack?.resolveAlias?.['@readest/turso-database-wasm/webpack']).toBeUndefined();
   });
 });
+
+describe('Service worker precache', () => {
+  // sw.ts serves its offline fallback from the precache only, so the web build
+  // has to add /offline to the manifest, next to the public/ files.
+  type ManifestEntry = { url: string; revision: string | null; size: number };
+  type SerwistOptions = {
+    cacheOnNavigation?: boolean;
+    manifestTransforms?: ((manifest: ManifestEntry[]) => Promise<{ manifest: ManifestEntry[] }>)[];
+  };
+
+  afterEach(() => {
+    vi.doUnmock('@serwist/next');
+    vi.doUnmock('@/config/accessPolicy');
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  test.each([
+    false,
+    true,
+  ])('caches app pages according to requireLogin=%s', async (requireLogin) => {
+    vi.doMock('@/config/accessPolicy', () => ({ accessPolicy: { requireLogin } }));
+    const withSerwistInit = vi.fn((_options: SerwistOptions) => (config: unknown) => config);
+    vi.doMock('@serwist/next', () => ({ default: withSerwistInit }));
+    vi.stubEnv('NEXT_PUBLIC_APP_PLATFORM', 'web');
+    vi.resetModules();
+    await import('../../next.config.mjs');
+    expect(withSerwistInit, 'the web build sets up Serwist').toHaveBeenCalled();
+
+    let manifest: ManifestEntry[] = [
+      { url: '/vendor/pdfjs/pdf.worker.min.mjs', revision: 'r1', size: 1 },
+    ];
+    for (const transform of withSerwistInit.mock.lastCall?.[0].manifestTransforms ?? []) {
+      ({ manifest } = await transform(manifest));
+    }
+    const urls = manifest.map(({ url }) => url);
+
+    expect(urls.includes('/offline'), 'the offline page is only precached in public mode').toBe(
+      !requireLogin,
+    );
+    expect(withSerwistInit.mock.lastCall?.[0].cacheOnNavigation).toBe(!requireLogin);
+    expect(urls).toContain('/vendor/pdfjs/pdf.worker.min.mjs');
+  });
+});

@@ -1,7 +1,9 @@
 import withSerwistInit from '@serwist/next';
 import withBundleAnalyzer from '@next/bundle-analyzer';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { accessPolicy } from './src/config/accessPolicy.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -198,7 +200,19 @@ const withPWA = pwaDisabled
   : withSerwistInit({
       swSrc: 'src/sw.ts',
       swDest: 'public/sw.js',
-      cacheOnNavigation: true,
+      // The offline fallback in sw.ts is served from the precache only, and
+      // nothing else puts the page there. Append it to the manifest:
+      // additionalPrecacheEntries would replace the public/ files Serwist
+      // precaches by default. A new revision makes every build fetch it again.
+      manifestTransforms: [
+        async (manifest) => ({
+          manifest: accessPolicy.requireLogin
+            ? manifest
+            : [...manifest, { url: '/offline', revision: randomUUID(), size: 0 }],
+          warnings: [],
+        }),
+      ],
+      cacheOnNavigation: !accessPolicy.requireLogin,
       reloadOnOnline: true,
       disable: false,
       register: true,

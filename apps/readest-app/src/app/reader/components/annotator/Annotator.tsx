@@ -3,6 +3,8 @@ import { RiDeleteBinLine } from 'react-icons/ri';
 
 import * as CFI from 'foliate-js/epubcfi.js';
 import { useEnv } from '@/context/EnvContext';
+import { useAuth } from '@/context/AuthContext';
+import { isCustomTranslatorAllowed } from '@/utils/access';
 import {
   BookNote,
   BooknoteGroup,
@@ -20,11 +22,17 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useNotebookStore } from '@/store/notebookStore';
 import { useSidebarStore } from '@/store/sidebarStore';
+import { useDictionaryDockStore } from '@/store/dictionaryDockStore';
+import { saveSysSettings } from '@/helpers/settings';
 import { useCustomDictionaryStore } from '@/store/customDictionaryStore';
 import { useVocabularyStore } from '@/store/vocabularyStore';
 import { isSystemDictionaryEnabled } from '@/services/dictionaries/registry';
-import { invokeSystemDictionary } from '@/services/dictionaries/systemDictionary';
+import {
+  invokeSystemDictionary,
+  isSystemDictionarySupported,
+} from '@/services/dictionaries/systemDictionary';
 import { buildSelectionContext } from '@/services/dictionaries/contextDictionary';
+import { getContextTranslator } from '@/services/dictionaries/providers/contextProvider';
 import type { DictionarySelectionContext } from '@/services/dictionaries/types';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
@@ -91,6 +99,7 @@ import {
   selectLocationAnnotations,
 } from '../../utils/annotationIndex';
 import { findContentAtPoint } from '../../utils/crossDocSelection';
+import { glossWordRange } from '../../utils/wordlensRuby';
 import {
   expandAllRenderedSections,
   expandGlobalAnnotation,
@@ -102,7 +111,7 @@ import PageTurnHint from './PageTurnHint';
 import SelectionRangeEditor from './SelectionRangeEditor';
 import AnnotationPopup from './AnnotationPopup';
 import DictionaryPopup from './DictionaryPopup';
-import type { VocabularyCapture } from './DictionaryResultsView';
+import type { UseDictionaryResultsArgs, VocabularyCapture } from './DictionaryResultsView';
 import { vocabularyLang } from '@/services/vocabulary/entry';
 import { sentenceAt } from '@/services/vocabulary/sentence';
 import DictionarySheet from './DictionarySheet';
@@ -212,6 +221,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
 }) => {
   const _ = useTranslation();
   const { envConfig, appService } = useEnv();
+  const { token } = useAuth();
   const { settings, setSettingsDialogBookKey, setSettingsDialogOpen, setActiveSettingsItemId } =
     useSettingsStore();
   const { isDarkMode, themeCode } = useThemeStore();
@@ -271,6 +281,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   // Decided when the lookup opens, as for the note editor: the keyboard for a
   // Learning word's hint field must not swap the popup for the sheet (#7570).
   const [dictionaryInSheet, setDictionaryInSheet] = useState(false);
+  // Set by the Context Dictionary tool: the lookup asks the AI alone (#7497).
+  const [dictionaryContextOnly, setDictionaryContextOnly] = useState(false);
   const [showDeepLPopup, setShowDeepLPopup] = useState(false);
   const [showProofreadPopup, setShowProofreadPopup] = useState(false);
   const [trianglePosition, setTrianglePosition] = useState<Position>();
@@ -384,7 +396,11 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   const globalToggleActive = !!currentAnnotation?.global;
   const annotPopupMaxWidth = Math.min(useResponsiveSize(300), maxWidth);
   const annotPopupToolSize = useResponsiveSize(44);
-  const toolbarToolTypes = getToolbarToolTypes(viewSettings.annotationToolbarItems, canShare);
+  const toolbarToolTypes = getToolbarToolTypes(
+    viewSettings.annotationToolbarItems,
+    canShare,
+    isSystemDictionarySupported(),
+  );
   const highlightOptionsGap = toolbarToolTypes.length <= 4 ? 4 : 8;
   // Three 30px styles, a four- or five-color pill (100px or 122px), and three gaps;
   // the global toggle adds a 30px button and a gap. Keep in sync with HighlightOptions.
@@ -553,16 +569,17 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   );
 
   // The passage around the looked-up text, for the AI context dictionary (#5544).
-  const dictionarySelection = useMemo<DictionarySelectionContext | undefined>(
-    () =>
-      showDictionaryPopup && selection?.range
-        ? {
-            ...buildSelectionContext(selection.range),
-            bookTitle: bookData.book?.title,
-            bookAuthor: bookData.book?.author,
-            targetLang: viewSettings.translateTargetLang,
-          }
-        : undefined,
+  const getDictionarySelection = (): DictionarySelectionContext | undefined =>
+    selection?.range
+      ? {
+          ...buildSelectionContext(selection.range),
+          bookTitle: bookData.book?.title,
+          bookAuthor: bookData.book?.author,
+          targetLang: viewSettings.translateTargetLang,
+        }
+      : undefined;
+  const dictionarySelection = useMemo(
+    () => (showDictionaryPopup ? getDictionarySelection() : undefined),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [showDictionaryPopup, selection],
   );
@@ -700,6 +717,10 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         rect?: TextSelection['rect'];
         getPopupCfi?: TextSelection['getPopupCfi'];
         quickAction?: boolean;
+        /** A tap on a Word Lens hint in the popup: look the word up (#7691). */
+        wordLens?: boolean;
+        /** The footnote popup itself closed, not just its selection (#7727). */
+        closed?: boolean;
       };
       if (detail.key !== bookKey) return;
       // Every event for this book advances the epoch so a handler still
@@ -708,8 +729,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       const epoch = ++footnoteSelectionEpochRef.current;
       if (!detail.range) {
         // The instant dictionary clears the popup selection as it opens; that
-        // report must not close the lookup.
-        if (selectionIsPopupRef.current && !instantLookupDeselectedRef.current) {
+        // report must not close the lookup. The popup closing does (#7727).
+        if (selectionIsPopupRef.current && (detail.closed || !instantLookupDeselectedRef.current)) {
           handleDismissPopup();
         }
         return;
@@ -779,6 +800,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       if (detail.quickAction && quickAction !== 'tts') {
         isTextSelected.current = true;
       }
+      if (detail.wordLens) pendingWordLensDictRef.current = true;
       setSelection({
         key: bookKey,
         text,
@@ -1119,14 +1141,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       const content = view?.renderer?.getContents().find((c) => c.doc === doc);
       if (!content || content.index == null) return;
       const index = content.index;
-      const rt = element.querySelector('rt');
-      const range = doc.createRange();
-      try {
-        range.selectNodeContents(element);
-        if (rt) range.setEndBefore(rt);
-      } catch {
-        return;
-      }
+      const range = glossWordRange(element);
+      if (!range) return;
       const text = range.toString().trim() || word;
       pendingWordLensDictRef.current = true;
       setSelection({
@@ -1356,7 +1372,17 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           // CJK term); on a longer selection fall back to the annotation
           // toolbar so highlighting and copying stay reachable (#5213).
           if (selection && isSingleLookupTerm(selection.text)) {
-            handleDictionary();
+            if (handleDictionary()) {
+              // Shown in the Notebook, nothing covers the word: hand it back
+              // now, as closing the popup would (#6213, #6454). The flag stops
+              // a republish of it (a highlight) from looking it up again.
+              if (viewSettings.keepSelectionAfterLookup) {
+                setSelection({ ...selection, quickActionHandled: true });
+              } else {
+                handleDismissPopupAndSelection();
+              }
+              break;
+            }
             // Drop the selection for as long as the lookup is up, so iOS's
             // native handles and blue highlight — painted above web content —
             // don't sit on top of the popup (#5585). With
@@ -1476,7 +1502,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         // Route through handleDictionary so a Word Lens gloss tap honours the
         // dictionary settings (system dictionary vs the in-app popup) — same
         // as the selection-toolbar and instant-quick-action dictionary paths.
-        handleDictionary();
+        // Shown in the Notebook, the tap needs nothing more from the word.
+        if (handleDictionary()) handleDismissPopupAndSelection();
       } else if (
         enableAnnotationQuickActions &&
         annotationQuickAction &&
@@ -2016,42 +2043,117 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     eventDispatcher.dispatch('search-term', { term, bookKey });
   };
 
+  /** Whether the lookup was shown in the Notebook's Dictionary tab. */
   const handleDictionary = () => {
-    if (!selection || !selection.text) return;
+    if (!selection || !selection.text) return false;
     // System-dictionary path: when the user has opted in via Settings →
     // Languages → Dictionaries, hand the selection to the OS instead of
     // opening the in-app popup. Exclusivity is enforced at the store
     // level (enabling system disables everything else and vice versa),
     // so a single check on the system flag is sufficient.
-    const dictSettings = useCustomDictionaryStore.getState().settings;
-    if (isSystemDictionaryEnabled(dictSettings)) {
-      // Build the macOS HUD anchor: the selection rect (so the HUD
-      // appears at the original word) and the underlying paragraph's
-      // text style (so AppKit re-draws the small label at the same
-      // font size / colour as the original, matching the system
-      // right-click → Look Up presentation).
-      const rect = selection.range ? getRangeRectInWebview(selection.range) : null;
-      const style = selection.range ? getRangeTextStyleInWebview(selection.range) : null;
-      const word = selection.text;
-      const lookup = invokeSystemDictionary(
-        word,
-        rect ? { rect, style: style ?? undefined } : undefined,
-      );
-      const capture =
-        dictSettings.saveLookupsToVocabulary !== false ? getDictionaryCapture() : undefined;
-      if (capture?.occurrence) {
-        const { lang, occurrence } = capture;
-        void lookup.then((launched) => {
-          if (launched) useVocabularyStore.getState().recordLookup({ word, lang, occurrence });
-        });
-      }
-      handleDismissPopupAndSelection();
-      return;
+    if (isSystemDictionaryEnabled(useCustomDictionaryStore.getState().settings)) {
+      handleSystemDictionary();
+      return false;
     }
+    return lookUpInApp(false);
+  };
+
+  // The System Dictionary tool hands the word to the OS whether or not System
+  // Dictionary is on in the list, so Dictionary can keep the in-app ones (#6728).
+  const handleSystemDictionary = () => {
+    if (!selection || !selection.text) return;
+    const dictSettings = useCustomDictionaryStore.getState().settings;
+    // Build the macOS HUD anchor: the selection rect (so the HUD
+    // appears at the original word) and the underlying paragraph's
+    // text style (so AppKit re-draws the small label at the same
+    // font size / colour as the original, matching the system
+    // right-click → Look Up presentation).
+    const rect = selection.range ? getRangeRectInWebview(selection.range) : null;
+    const style = selection.range ? getRangeTextStyleInWebview(selection.range) : null;
+    const word = selection.text;
+    const lookup = invokeSystemDictionary(
+      word,
+      rect ? { rect, style: style ?? undefined } : undefined,
+    );
+    const capture = getDictionaryCapture();
+    if (capture?.occurrence) {
+      const { lang, occurrence } = capture;
+      const saveLookups = dictSettings.saveLookupsToVocabulary !== false;
+      void lookup.then((launched) => {
+        // A marked word keeps its sentences with saving off (#7691); read
+        // the mark once launched, after any change made in the meantime.
+        const vocabulary = useVocabularyStore.getState();
+        if (launched && (saveLookups || vocabulary.isMarked(word, lang))) {
+          vocabulary.recordLookup({ word, lang, occurrence });
+        }
+      });
+    }
+    handleDismissPopupAndSelection();
+  };
+
+  // Saves the word without the dictionary popup, whether or not lookups are
+  // saved: adding it is the point of the tool.
+  const handleAddToVocabulary = () => {
+    const capture = getDictionaryCapture();
+    if (!selection?.text || !capture) return;
+    useVocabularyStore.getState().recordLookup({ word: selection.text, ...capture });
+    eventDispatcher.dispatch('toast', {
+      type: 'info',
+      message: _('Added to vocabulary'),
+      className: 'whitespace-nowrap',
+      timeout: 2000,
+    });
+    handleDismissPopupAndSelection();
+  };
+
+  // Asks the AI context dictionary alone, so it can stay off in the dictionary
+  // list and spend no tokens on everyday lookups (#7497).
+  const handleContextDictionary = () => {
+    if (!selection || !selection.text) return;
+    lookUpInApp(true);
+  };
+
+  // Every in-app lookup is kept for the Notebook's Dictionary tab (#7730). While
+  // that tab is on screen it shows the lookup there, opens no popup over the
+  // word, and returns true; the word stays selected for the toolbar.
+  const lookUpInApp = (contextOnly: boolean) => {
+    if (!selection?.text) return false;
+    const { isDocked, setLookup } = useDictionaryDockStore.getState();
+    setLookup({
+      word: selection.text,
+      lang: bookData.bookDoc?.metadata.language as string,
+      selection: getDictionarySelection(),
+      capture: getDictionaryCapture(),
+      contextOnly,
+    });
+    if (isDocked) return true;
     setShowAnnotPopup(false);
     void suppressNativeSelectionHandles();
     setDictionaryInSheet(isSheetViewport());
+    setDictionaryContextOnly(contextOnly);
     setShowDictionaryPopup(true);
+    return false;
+  };
+
+  // Pin to Notebook in the popup: the lookup moves into the Dictionary tab of a
+  // pinned Notebook, and the word is handed back as closing the popup would.
+  // From the instant dictionary that is the toolbar only with
+  // keepSelectionAfterLookup, as for its later lookups into the tab (#6454).
+  const handlePinDictionary = (lookup: UseDictionaryResultsArgs) => {
+    useDictionaryDockStore.getState().setLookup(lookup);
+    // The Notebook shows the book the sidebar is on.
+    useSidebarStore.getState().setSideBarBookKey(bookKey);
+    const { setNotebookActiveTab, setNotebookPin, setNotebookVisible } =
+      useNotebookStore.getState();
+    setNotebookActiveTab('dictionary');
+    setNotebookPin(true);
+    setNotebookVisible(true);
+    void saveSysSettings(envConfig, 'globalReadSettings', {
+      ...settings.globalReadSettings,
+      isNotebookPinned: true,
+      notebookActiveTab: 'dictionary',
+    });
+    handleDismissPopupShowToolbar();
   };
 
   const handleTranslation = () => {
@@ -2742,6 +2844,18 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         return { tooltipText: _(label), Icon, onClick: handleSearch };
       case 'dictionary':
         return { tooltipText: _(label), Icon, onClick: handleDictionary };
+      case 'systemdictionary':
+        return { tooltipText: _(label), Icon, onClick: handleSystemDictionary };
+      case 'vocabulary':
+        return { tooltipText: _(label), Icon, onClick: handleAddToVocabulary };
+      case 'contextdictionary':
+        return {
+          tooltipText: _(label),
+          Icon,
+          onClick: handleContextDictionary,
+          // Premium, like the Context Dictionary switch in Manage Dictionaries.
+          disabled: !isCustomTranslatorAllowed(token) || !getContextTranslator(),
+        };
       case 'translate':
         return { tooltipText: _(label), Icon, onClick: handleTranslation };
       case 'tts':
@@ -2848,8 +2962,12 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
                 lang={bookData.bookDoc?.metadata.language as string}
                 selection={dictionarySelection}
                 capture={dictionaryCapture}
+                contextOnly={dictionaryContextOnly}
                 onDismiss={handleDismissPopupShowToolbar}
                 onManage={onManage}
+                // The Notebook pins beside the page from 640 px wide, as on a
+                // phone in landscape, which is too short for the popup (#7789).
+                onPin={window.innerWidth >= 640 ? handlePinDictionary : undefined}
               />
             );
           }
@@ -2864,8 +2982,10 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
               trianglePosition={trianglePosition}
               popupWidth={dictPopupWidth}
               popupHeight={dictPopupHeight}
+              contextOnly={dictionaryContextOnly}
               onDismiss={handleDismissPopupShowToolbar}
               onManage={onManage}
+              onPin={handlePinDictionary}
             />
           );
         })()}

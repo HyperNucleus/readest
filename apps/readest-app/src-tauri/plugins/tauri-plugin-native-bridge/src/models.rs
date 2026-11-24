@@ -969,6 +969,24 @@ pub struct AnkiListDecksResponse {
     pub error: Option<String>,
 }
 
+/// A note type in the collection and its field names (#7849).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiNoteTypeInfo {
+    pub id: i64,
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiListNoteTypesResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_types: Option<Vec<AnkiNoteTypeInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnkiReadDeckRequest {
@@ -981,6 +999,8 @@ pub struct AnkiReadDeckRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AnkiNoteRow {
     pub id: i64,
+    /// The note's note type.
+    pub mid: i64,
     pub fields: Vec<String>,
     pub tags: String,
 }
@@ -1016,6 +1036,10 @@ pub struct AnkiOutgoingNote {
 #[serde(rename_all = "camelCase")]
 pub struct AnkiAddNotesRequest {
     pub deck_name: String,
+    /// A card profile's note type (#7849), whose fields the notes carry in its
+    /// order; Readest's own note type when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<i64>,
     pub notes: Vec<AnkiOutgoingNote>,
 }
 
@@ -1048,4 +1072,87 @@ pub struct AnkiUpdateTagsResponse {
     pub updated: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Whether the Readest note type still lacks its audio fields or template (#7729).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiNoteTypeResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outdated: Option<bool>,
+    /// The Readest note type's id and field names; omitted before Sync created it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiNoteFill {
+    pub id: i64,
+    pub word: String,
+    pub language: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiUpgradeNoteTypeRequest {
+    pub notes: Vec<AnkiNoteFill>,
+}
+
+/// A dictionary entry for a note's empty entry field (#7728, #7849).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiEntry {
+    pub id: i64,
+    /// The index of the note's entry field.
+    pub field: i64,
+    pub entry: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiSetEntriesRequest {
+    pub notes: Vec<AnkiEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnDeviceLlmStatusResponse {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Tokens per session, shared by instructions, prompt and reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_size: Option<u32>,
+    /// Base language codes the model supports, e.g. `en`, `zh`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnDeviceLlmGenerateRequest {
+    pub request_id: String,
+    pub instructions: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnDeviceLlmGenerateResponse {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnDeviceLlmCancelRequest {
+    pub request_id: String,
 }
